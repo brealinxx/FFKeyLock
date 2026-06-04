@@ -1,1 +1,10 @@
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\AppState.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\AppState.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\Config.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\Config.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\FFKeyLock.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\FFKeyLock.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\GameProtection.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\GameProtection.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\InputLanguage.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\InputLanguage.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\Localization.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\Localization.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\MainWindow.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\MainWindow.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\StringUtils.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\StringUtils.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\TrayIcon.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\TrayIcon.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\WindowsKeyGuard.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\WindowsKeyGuard.obj

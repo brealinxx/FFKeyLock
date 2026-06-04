@@ -77,6 +77,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -95,6 +96,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -111,6 +113,7 @@
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -129,6 +132,7 @@
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -139,20 +143,37 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="AppState.h" />
+    <ClInclude Include="Config.h" />
     <ClInclude Include="FFKeyLock.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="GameProtection.h" />
+    <ClInclude Include="InputLanguage.h" />
+    <ClInclude Include="Localization.h" />
+    <ClInclude Include="MainWindow.h" />
     <ClInclude Include="Resource.h" />
+    <ClInclude Include="StringUtils.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="TrayIcon.h" />
+    <ClInclude Include="WindowsKeyGuard.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AppState.cpp" />
+    <ClCompile Include="Config.cpp" />
     <ClCompile Include="FFKeyLock.cpp" />
+    <ClCompile Include="GameProtection.cpp" />
+    <ClCompile Include="InputLanguage.cpp" />
+    <ClCompile Include="Localization.cpp" />
+    <ClCompile Include="MainWindow.cpp" />
+    <ClCompile Include="StringUtils.cpp" />
+    <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="WindowsKeyGuard.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="FFKeyLock.rc" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="FFKeyLock.ico" />
-    <Image Include="small.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
