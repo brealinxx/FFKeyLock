@@ -67,28 +67,3 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
-
-
-# ==========================================
-# Visual Studio & .NET Essentials
-# ==========================================
-
-.vs/
-.vs*/
-[Tt]est[Rr]esults/
-
-# 2. 忽略 .NET 编译生成的输出目录（核心！）
-# C# 编译不仅生成 .exe/.dll，还会把所有依赖塞进 bin 和 obj
-[Bb]in/
-[Oo]bj/
-
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-
-_ReSharper*/
-*.dotCover/
-
-.idea/
-.vscode/

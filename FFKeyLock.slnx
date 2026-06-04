@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="FFKeyLock/FFKeyLock.vcxproj" Id="1ad38800-5b7c-4898-bb50-36b1d0413be8" />
+</Solution>
