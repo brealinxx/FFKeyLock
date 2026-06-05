@@ -17,6 +17,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -24,12 +25,28 @@
 
 namespace FFKeyLock
 {
+void DestroyTrayMenu();
+
 namespace
 {
 constexpr wchar_t kProtectedBrowserClass[] = L"FFKeyLockProtectedBrowser";
+constexpr wchar_t kTrayMenuClass[] = L"FFKeyLockTrayMenu";
 HWND g_protectedBrowserWindow = nullptr;
 HWND g_protectedBrowserList = nullptr;
+HWND g_trayMenuWindow = nullptr;
 std::vector<std::unique_ptr<std::wstring>> g_menuTextStore;
+
+struct TrayMenuItem
+{
+    UINT id;
+    std::wstring text;
+    bool checked;
+    bool enabled;
+    bool separator;
+};
+
+std::vector<TrayMenuItem> g_trayMenuItems;
+int g_trayMenuHover = -1;
 
 int Scale(int value)
 {
@@ -98,6 +115,94 @@ HWND CreateControl(const wchar_t* className, const wchar_t* text, DWORD style, i
 }
 
 void RefreshProtectedBrowserList();
+
+COLORREF AccentColor()
+{
+    return RGB(34, 197, 94);
+}
+
+COLORREF WarningColor()
+{
+    return RGB(234, 179, 8);
+}
+
+COLORREF DangerColor()
+{
+    return RGB(239, 68, 68);
+}
+
+COLORREF HoverColor()
+{
+    return RGB(38, 54, 73);
+}
+
+void FillRoundRect(HDC hdc, const RECT& rect, COLORREF fill, COLORREF border, int radius)
+{
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+}
+
+struct CardControl
+{
+    static void Draw(HDC hdc, const RECT& rect)
+    {
+        FillRoundRect(hdc, rect, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(12));
+    }
+};
+
+struct ToggleSwitchControl
+{
+    static void Draw(HDC hdc, const RECT& rect, bool on)
+    {
+        const COLORREF track = on ? AccentColor() : RGB(75, 85, 99);
+        FillRoundRect(hdc, rect, track, track, Scale(18));
+
+        const int knob = (rect.bottom - rect.top) - Scale(8);
+        RECT knobRect{
+            on ? rect.right - Scale(4) - knob : rect.left + Scale(4),
+            rect.top + Scale(4),
+            on ? rect.right - Scale(4) : rect.left + Scale(4) + knob,
+            rect.bottom - Scale(4),
+        };
+        FillRoundRect(hdc, knobRect, RGB(243, 244, 246), RGB(243, 244, 246), knob);
+    }
+};
+
+HFONT CreatePaintFont(int pointSize, int weight)
+{
+    LOGFONTW font{};
+    font.lfHeight = -MulDiv(pointSize, GetDpiForWindow(g_hWnd), 72);
+    font.lfWeight = weight;
+    font.lfQuality = CLEARTYPE_QUALITY;
+    StringCchCopyW(font.lfFaceName, std::size(font.lfFaceName), IsEnglish() ? L"Segoe UI" : L"Microsoft YaHei UI");
+    return CreateFontIndirectW(&font);
+}
+
+void DrawTextBlock(HDC hdc, const std::wstring& text, RECT rect, COLORREF color, HFONT font, UINT format)
+{
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, color);
+    HGDIOBJ oldFont = SelectObject(hdc, font ? font : ThemeManager::UiFont());
+    DrawTextW(hdc, text.c_str(), -1, &rect, format);
+    SelectObject(hdc, oldFont);
+}
+
+RECT ScaledRect(int left, int top, int right, int bottom)
+{
+    return RECT{ Scale(left), Scale(top), Scale(right), Scale(bottom) };
+}
+
+void DrawToggleGlyph(HDC hdc, RECT rect, bool on)
+{
+    ToggleSwitchControl::Draw(hdc, rect, on);
+}
 
 std::wstring* StoreMenuText(const std::wstring& text)
 {
@@ -244,32 +349,28 @@ std::wstring GetSelectedBrowserGameName()
 
 void CreateMainControls()
 {
-    g_titleText = CreateControl(L"STATIC", L"FFKeyLock", SS_LEFT, 24, 20, 180, 28, IDC_STATIC);
-    if (g_titleText)
-    {
-        SendMessageW(g_titleText, WM_SETFONT, reinterpret_cast<WPARAM>(ThemeManager::TitleFont() ? ThemeManager::TitleFont() : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-    }
-    g_statusText = CreateControl(L"STATIC", L"", SS_LEFT, 24, 56, 600, 24, IDC_STATUS_TEXT);
+    g_titleText = CreateControl(L"STATIC", L"", SS_LEFT, 0, 0, 0, 0, IDC_STATIC);
+    g_statusText = CreateControl(L"STATIC", L"", SS_LEFT, 0, 0, 0, 0, IDC_STATUS_TEXT);
 
-    g_protectionButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 24, 96, 148, 36, IDC_PROTECTION_BUTTON);
-    g_autoDetectButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 184, 96, 148, 36, IDC_AUTO_DETECT_BUTTON);
-    g_startupButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 344, 96, 148, 36, IDC_STARTUP_BUTTON);
-    g_windowsKeyButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 504, 96, 120, 36, IDC_WINDOWS_KEY_BUTTON);
+    g_protectionButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 32, 302, 210, 88, IDC_PROTECTION_BUTTON);
+    g_autoDetectButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 258, 302, 210, 88, IDC_AUTO_DETECT_BUTTON);
+    g_startupButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 484, 302, 210, 88, IDC_STARTUP_BUTTON);
+    g_windowsKeyButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 710, 302, 210, 88, IDC_WINDOWS_KEY_BUTTON);
 
-    g_switchEnglishButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 24, 144, 148, 34, IDC_SWITCH_EN_BUTTON);
-    g_switchChineseButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 184, 144, 148, 34, IDC_SWITCH_CN_BUTTON);
+    g_switchEnglishButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 690, 636, 128, 34, IDC_SWITCH_EN_BUTTON);
+    g_switchChineseButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 830, 636, 128, 34, IDC_SWITCH_CN_BUTTON);
 
-    g_gameListLabel = CreateControl(L"STATIC", L"", SS_LEFT, 24, 204, 126, 24, IDC_STATIC);
-    g_gameListHelpButton = CreateControl(L"BUTTON", L"?", BS_PUSHBUTTON, 148, 201, 24, 24, IDC_GAME_LIST_HELP);
+    g_gameListLabel = CreateControl(L"STATIC", L"", SS_LEFT, 0, 0, 0, 0, IDC_STATIC);
+    g_gameListHelpButton = CreateControl(L"BUTTON", L"?", BS_PUSHBUTTON, 812, 438, 40, 34, IDC_GAME_LIST_HELP);
     g_gameList = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
+        0,
         L"LISTBOX",
         nullptr,
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
-        Scale(24),
-        Scale(236),
-        Scale(430),
-        Scale(150),
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_CLIPSIBLINGS,
+        Scale(32),
+        Scale(486),
+        Scale(590),
+        Scale(178),
         g_hWnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_GAME_LIST)),
         g_hInst,
@@ -279,19 +380,19 @@ void CreateMainControls()
         SetDefaultFont(g_gameList);
     }
 
-    g_browseProtectedButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 198, 118, 32, IDC_BROWSE_PROTECTED_BUTTON);
-    g_addCurrentButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 236, 118, 32, IDC_ADD_GAME_BUTTON);
-    g_addFileButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 278, 118, 32, IDC_ADD_FILE_BUTTON);
-    g_deleteGameButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 320, 118, 32, IDC_DELETE_GAME_BUTTON);
+    g_browseProtectedButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 352, 438, 132, 34, IDC_BROWSE_PROTECTED_BUTTON);
+    g_addCurrentButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 492, 438, 132, 34, IDC_ADD_GAME_BUTTON);
+    g_addFileButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 632, 438, 132, 34, IDC_ADD_FILE_BUTTON);
+    g_deleteGameButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 772, 438, 132, 34, IDC_DELETE_GAME_BUTTON);
     g_configText = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
+        0,
         L"EDIT",
         L"",
-        WS_CHILD | WS_VISIBLE | ES_READONLY | ES_AUTOHSCROLL,
-        Scale(24),
-        Scale(410),
-        Scale(560),
-        Scale(28),
+        WS_CHILD | ES_READONLY | ES_AUTOHSCROLL,
+        0,
+        0,
+        0,
+        0,
         g_hWnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONFIG_TEXT)),
         g_hInst,
@@ -306,81 +407,82 @@ void CreateMainControls()
 
 void ResizeMainControls(int width, int height)
 {
-    const int margin = Scale(24);
+    const int margin = Scale(32);
     const int gap = Scale(16);
-    const int rightButtonWidth = Scale(118);
-    const int rightButtonX = std::max(Scale(470), width - margin - rightButtonWidth);
-    const int listX = margin;
-    const int listY = Scale(236);
-    const int listWidth = std::max(Scale(260), rightButtonX - gap - listX);
-    const int listHeight = std::max(Scale(132), height - Scale(352));
-    const int labelY = Scale(204);
-    const int buttonHeight = Scale(32);
-    const int configY = listY + listHeight + Scale(20);
+    const int contentWidth = std::max(Scale(720), width - margin * 2);
+    const int quickTop = Scale(302);
+    const int quickWidth = std::max(Scale(156), (contentWidth - gap * 3) / 4);
+    const int quickHeight = Scale(88);
+    const int listTop = Scale(486);
+    const int footerTop = std::max(Scale(628), height - Scale(64));
+    const int listHeight = std::max(Scale(112), footerTop - listTop - Scale(18));
+    const int toolTop = Scale(438);
+    const int toolWidth = std::max(Scale(104), std::min(Scale(132), (width - margin * 2 - Scale(404)) / 4));
+    const int toolStart = std::max(margin + Scale(300), width - margin - Scale(40) - gap - toolWidth * 4 - gap * 3);
 
     if (g_titleText)
     {
-        MoveWindow(g_titleText, margin, Scale(20), Scale(180), Scale(28), TRUE);
+        MoveWindow(g_titleText, 0, 0, 0, 0, FALSE);
     }
     if (g_statusText)
     {
-        MoveWindow(g_statusText, margin, Scale(56), std::max(Scale(260), width - margin * 2), Scale(24), TRUE);
+        MoveWindow(g_statusText, 0, 0, 0, 0, FALSE);
     }
     if (g_protectionButton)
     {
-        MoveWindow(g_protectionButton, margin, Scale(96), Scale(148), Scale(36), TRUE);
+        MoveWindow(g_protectionButton, margin, quickTop, quickWidth, quickHeight, TRUE);
     }
     if (g_autoDetectButton)
     {
-        MoveWindow(g_autoDetectButton, margin + Scale(160), Scale(96), Scale(148), Scale(36), TRUE);
+        MoveWindow(g_autoDetectButton, margin + (quickWidth + gap), quickTop, quickWidth, quickHeight, TRUE);
     }
     if (g_startupButton)
     {
-        MoveWindow(g_startupButton, margin + Scale(320), Scale(96), Scale(148), Scale(36), TRUE);
+        MoveWindow(g_startupButton, margin + (quickWidth + gap) * 2, quickTop, quickWidth, quickHeight, TRUE);
     }
     if (g_windowsKeyButton)
     {
-        MoveWindow(g_windowsKeyButton, margin + Scale(480), Scale(96), Scale(120), Scale(36), TRUE);
+        MoveWindow(g_windowsKeyButton, margin + (quickWidth + gap) * 3, quickTop, quickWidth, quickHeight, TRUE);
     }
     if (g_switchEnglishButton)
     {
-        MoveWindow(g_switchEnglishButton, margin, Scale(144), Scale(148), Scale(34), TRUE);
+        MoveWindow(g_switchEnglishButton, width - margin - Scale(268), footerTop + Scale(8), Scale(128), Scale(34), TRUE);
     }
     if (g_switchChineseButton)
     {
-        MoveWindow(g_switchChineseButton, margin + Scale(160), Scale(144), Scale(148), Scale(34), TRUE);
+        MoveWindow(g_switchChineseButton, width - margin - Scale(128), footerTop + Scale(8), Scale(128), Scale(34), TRUE);
     }
     if (g_gameListLabel)
     {
-        MoveWindow(g_gameListLabel, listX, labelY, Scale(122), Scale(24), TRUE);
+        MoveWindow(g_gameListLabel, 0, 0, 0, 0, FALSE);
     }
     if (g_gameList)
     {
-        MoveWindow(g_gameList, listX, listY, listWidth, listHeight, TRUE);
+        MoveWindow(g_gameList, margin, listTop, contentWidth, listHeight, TRUE);
     }
     if (g_gameListHelpButton)
     {
-        MoveWindow(g_gameListHelpButton, listX + Scale(124), labelY - Scale(3), Scale(24), Scale(24), TRUE);
+        MoveWindow(g_gameListHelpButton, width - margin - Scale(40), toolTop, Scale(40), Scale(34), TRUE);
     }
     if (g_browseProtectedButton)
     {
-        MoveWindow(g_browseProtectedButton, rightButtonX, labelY - Scale(6), rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_browseProtectedButton, toolStart, toolTop, toolWidth, Scale(34), TRUE);
     }
     if (g_addCurrentButton)
     {
-        MoveWindow(g_addCurrentButton, rightButtonX, listY, rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_addCurrentButton, toolStart + (toolWidth + gap), toolTop, toolWidth, Scale(34), TRUE);
     }
     if (g_addFileButton)
     {
-        MoveWindow(g_addFileButton, rightButtonX, listY + Scale(42), rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_addFileButton, toolStart + (toolWidth + gap) * 2, toolTop, toolWidth, Scale(34), TRUE);
     }
     if (g_deleteGameButton)
     {
-        MoveWindow(g_deleteGameButton, rightButtonX, listY + Scale(84), rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_deleteGameButton, toolStart + (toolWidth + gap) * 3, toolTop, toolWidth, Scale(34), TRUE);
     }
     if (g_configText)
     {
-        MoveWindow(g_configText, margin, configY, std::max(Scale(260), width - margin * 2), Scale(28), TRUE);
+        MoveWindow(g_configText, 0, 0, 0, 0, FALSE);
     }
 
     InvalidateRect(g_hWnd, nullptr, TRUE);
@@ -786,23 +888,70 @@ void PaintMainWindow(HWND hWnd)
     GetClientRect(hWnd, &client);
     FillRect(hdc, &client, ThemeManager::WindowBrush());
 
-    auto drawCard = [&](RECT rect)
-    {
-        HBRUSH brush = CreateSolidBrush(ThemeManager::SurfaceColor());
-        HPEN pen = CreatePen(PS_SOLID, 1, ThemeManager::BorderColor());
-        HGDIOBJ oldBrush = SelectObject(hdc, brush);
-        HGDIOBJ oldPen = SelectObject(hdc, pen);
-        RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, Scale(10), Scale(10));
-        SelectObject(hdc, oldBrush);
-        SelectObject(hdc, oldPen);
-        DeleteObject(brush);
-        DeleteObject(pen);
-    };
+    HFONT brandFont = CreatePaintFont(18, FW_SEMIBOLD);
+    HFONT titleFont = CreatePaintFont(17, FW_SEMIBOLD);
+    HFONT sectionFont = CreatePaintFont(13, FW_SEMIBOLD);
+    HFONT valueFont = CreatePaintFont(24, FW_BOLD);
+    HFONT bodyFont = CreatePaintFont(10, FW_NORMAL);
+    HFONT smallFont = CreatePaintFont(9, FW_NORMAL);
 
-    RECT controlsCard{ Scale(16), Scale(88), client.right - Scale(16), Scale(188) };
-    RECT listCard{ Scale(16), Scale(192), client.right - Scale(16), client.bottom - Scale(72) };
-    drawCard(controlsCard);
-    drawCard(listCard);
+    RECT brandIcon = ScaledRect(32, 24, 62, 54);
+    FillRoundRect(hdc, brandIcon, AccentColor(), AccentColor(), Scale(10));
+    DrawTextBlock(hdc, L"F", brandIcon, RGB(17, 24, 39), titleFont, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawTextBlock(hdc, L"FFKeyLock", ScaledRect(74, 21, 260, 58), ThemeManager::TextColor(), brandFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextBlock(hdc, L"概览", ScaledRect(32, 80, 160, 116), ThemeManager::TextColor(), titleFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextBlock(hdc, L"快速查看当前状态和常用操作", ScaledRect(32, 112, 340, 136), ThemeManager::MutedTextColor(), bodyFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT toggleText{ client.right - Scale(210), Scale(36), client.right - Scale(92), Scale(64) };
+    DrawTextBlock(hdc, L"保护模式", toggleText, ThemeManager::TextColor(), bodyFont, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    DrawToggleGlyph(hdc, RECT{ client.right - Scale(76), Scale(34), client.right - Scale(32), Scale(58) }, g_protectionEnabled);
+
+    const int margin = Scale(32);
+    const int gap = Scale(16);
+    const int contentWidth = std::max(Scale(720), static_cast<int>(client.right) - margin * 2);
+    const int statusWidth = std::max(Scale(156), (contentWidth - gap * 3) / 4);
+    const int statusTop = Scale(142);
+    struct StatusCard
+    {
+        const wchar_t* title;
+        std::wstring value;
+        const wchar_t* subtitle;
+        COLORREF color;
+    };
+    std::array<StatusCard, 4> statuses{ {
+        { L"保护状态", g_protectionEnabled ? L"已开启" : L"关闭", L"正在保护您的按键和系统", g_protectionEnabled ? AccentColor() : DangerColor() },
+        { L"自动检测", g_autoDetectEnabled ? L"开启" : L"关闭", L"监控游戏进程中", g_autoDetectEnabled ? AccentColor() : DangerColor() },
+        { L"Win 键", g_windowsKeyGuardEnabled ? L"已禁用" : L"未禁用", L"屏蔽 Win 键功能", g_windowsKeyGuardEnabled ? AccentColor() : WarningColor() },
+        { L"受保护程序", std::to_wstring(g_gameExeNames.size()), L"已添加的程序数量", AccentColor() },
+    } };
+
+    for (size_t i = 0; i < statuses.size(); ++i)
+    {
+        RECT card{ margin + static_cast<int>(i) * (statusWidth + gap), statusTop, margin + static_cast<int>(i) * (statusWidth + gap) + statusWidth, statusTop + Scale(106) };
+        CardControl::Draw(hdc, card);
+        DrawTextBlock(hdc, statuses[i].title, RECT{ card.left + Scale(22), card.top + Scale(18), card.right - Scale(18), card.top + Scale(42) }, ThemeManager::TextColor(), bodyFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextBlock(hdc, statuses[i].value, RECT{ card.left + Scale(22), card.top + Scale(44), card.right - Scale(18), card.top + Scale(80) }, statuses[i].color, valueFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextBlock(hdc, statuses[i].subtitle, RECT{ card.left + Scale(22), card.top + Scale(80), card.right - Scale(18), card.bottom - Scale(12) }, ThemeManager::MutedTextColor(), smallFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+
+    DrawTextBlock(hdc, L"快速操作", ScaledRect(32, 270, 180, 296), ThemeManager::TextColor(), sectionFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT listCard{ Scale(32), Scale(416), client.right - Scale(32), std::max(Scale(608), static_cast<int>(client.bottom) - Scale(82)) };
+    CardControl::Draw(hdc, listCard);
+    DrawTextBlock(hdc, L"受保护的程序", RECT{ listCard.left + Scale(20), listCard.top + Scale(18), listCard.left + Scale(220), listCard.top + Scale(48) }, ThemeManager::TextColor(), sectionFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextBlock(hdc, (std::to_wstring(g_gameExeNames.size()) + L" 个"), RECT{ listCard.left + Scale(210), listCard.top + Scale(18), listCard.left + Scale(280), listCard.top + Scale(48) }, AccentColor(), sectionFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT footer{ Scale(32), std::max(Scale(628), static_cast<int>(client.bottom) - Scale(64)), client.right - Scale(32), client.bottom - Scale(18) };
+    FillRoundRect(hdc, footer, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(10));
+    DrawTextBlock(hdc, L"配置文件:", RECT{ footer.left + Scale(18), footer.top, footer.left + Scale(96), footer.bottom }, ThemeManager::MutedTextColor(), smallFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextBlock(hdc, g_configPath, RECT{ footer.left + Scale(96), footer.top, footer.right - Scale(304), footer.bottom }, ThemeManager::TextColor(), smallFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+
+    DeleteObject(brandFont);
+    DeleteObject(titleFont);
+    DeleteObject(sectionFont);
+    DeleteObject(valueFont);
+    DeleteObject(bodyFont);
+    DeleteObject(smallFont);
     EndPaint(hWnd, &paint);
 }
 
@@ -938,8 +1087,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_GETMINMAXINFO:
     {
         auto* minMaxInfo = reinterpret_cast<MINMAXINFO*>(lParam);
-        minMaxInfo->ptMinTrackSize.x = Scale(640);
-        minMaxInfo->ptMinTrackSize.y = Scale(500);
+        minMaxInfo->ptMinTrackSize.x = Scale(900);
+        minMaxInfo->ptMinTrackSize.y = Scale(620);
         return 0;
     }
 
@@ -1109,6 +1258,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_DESTROY:
         KillTimer(hWnd, TIMER_GAME_DETECT);
+        DestroyTrayMenu();
         if (g_protectedBrowserWindow)
         {
             DestroyWindow(g_protectedBrowserWindow);
@@ -1228,7 +1378,242 @@ HWND GetCommandTargetWindow()
     return IsOwnWindow(foregroundWindow) ? nullptr : foregroundWindow;
 }
 
+int TrayMenuItemHeight(const TrayMenuItem& item)
+{
+    return item.separator ? Scale(10) : Scale(34);
+}
+
+int HitTestTrayMenuItem(int y)
+{
+    int cursor = Scale(10);
+    for (size_t i = 0; i < g_trayMenuItems.size(); ++i)
+    {
+        const int height = TrayMenuItemHeight(g_trayMenuItems[i]);
+        if (!g_trayMenuItems[i].separator && y >= cursor && y < cursor + height)
+        {
+            return static_cast<int>(i);
+        }
+        cursor += height;
+    }
+    return -1;
+}
+
+void DestroyTrayMenu()
+{
+    if (g_trayMenuWindow)
+    {
+        HWND window = g_trayMenuWindow;
+        g_trayMenuWindow = nullptr;
+        DestroyWindow(window);
+    }
+}
+
+void PaintTrayMenu(HWND hwnd)
+{
+    PAINTSTRUCT paint{};
+    HDC hdc = BeginPaint(hwnd, &paint);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    FillRoundRect(hdc, client, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(12));
+
+    HFONT itemFont = CreatePaintFont(10, FW_NORMAL);
+    HFONT statusFont = CreatePaintFont(10, FW_SEMIBOLD);
+    int y = Scale(10);
+    for (size_t i = 0; i < g_trayMenuItems.size(); ++i)
+    {
+        const TrayMenuItem& item = g_trayMenuItems[i];
+        const int itemHeight = TrayMenuItemHeight(item);
+        if (item.separator)
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, ThemeManager::BorderColor());
+            HGDIOBJ oldPen = SelectObject(hdc, pen);
+            MoveToEx(hdc, Scale(14), y + Scale(5), nullptr);
+            LineTo(hdc, client.right - Scale(14), y + Scale(5));
+            SelectObject(hdc, oldPen);
+            DeleteObject(pen);
+            y += itemHeight;
+            continue;
+        }
+
+        RECT row{ Scale(8), y, client.right - Scale(8), y + itemHeight };
+        if (static_cast<int>(i) == g_trayMenuHover && item.enabled)
+        {
+            FillRoundRect(hdc, row, HoverColor(), HoverColor(), Scale(8));
+        }
+        if (item.checked)
+        {
+            RECT mark{ row.left + Scale(12), row.top + Scale(10), row.left + Scale(22), row.top + Scale(20) };
+            FillRoundRect(hdc, mark, AccentColor(), AccentColor(), Scale(5));
+        }
+
+        RECT textRect{ row.left + Scale(34), row.top, row.right - Scale(14), row.bottom };
+        DrawTextBlock(hdc, item.text, textRect, item.enabled ? ThemeManager::TextColor() : ThemeManager::MutedTextColor(),
+            item.id == 0 ? statusFont : itemFont, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += itemHeight;
+    }
+
+    DeleteObject(itemFont);
+    DeleteObject(statusFont);
+    EndPaint(hwnd, &paint);
+}
+
+LRESULT CALLBACK TrayMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_PAINT:
+        PaintTrayMenu(hwnd);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_MOUSEMOVE:
+    {
+        const int hit = HitTestTrayMenuItem(GET_Y_LPARAM(lParam));
+        if (hit != g_trayMenuHover)
+        {
+            g_trayMenuHover = hit;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, hwnd, 0 };
+        TrackMouseEvent(&track);
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        g_trayMenuHover = -1;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONUP:
+    {
+        const int hit = HitTestTrayMenuItem(GET_Y_LPARAM(lParam));
+        if (hit >= 0 && hit < static_cast<int>(g_trayMenuItems.size()))
+        {
+            const TrayMenuItem item = g_trayMenuItems[hit];
+            if (item.enabled && item.id != 0)
+            {
+                DestroyTrayMenu();
+                SendMessageW(g_hWnd, WM_COMMAND, MAKEWPARAM(item.id, 0), 0);
+                return 0;
+            }
+        }
+        DestroyTrayMenu();
+        return 0;
+    }
+    case WM_RBUTTONUP:
+    case WM_KILLFOCUS:
+    case WM_CANCELMODE:
+        DestroyTrayMenu();
+        return 0;
+    case WM_NCDESTROY:
+        if (g_trayMenuWindow == hwnd)
+        {
+            g_trayMenuWindow = nullptr;
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void RegisterTrayMenuClass()
+{
+    static bool registered = false;
+    if (registered)
+    {
+        return;
+    }
+
+    WNDCLASSEXW wcex{};
+    wcex.cbSize = sizeof(wcex);
+    wcex.lpfnWndProc = TrayMenuProc;
+    wcex.hInstance = g_hInst;
+    wcex.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wcex.hbrBackground = ThemeManager::SurfaceBrush();
+    wcex.lpszClassName = kTrayMenuClass;
+    RegisterClassExW(&wcex);
+    registered = true;
+}
+
+void AddTrayMenuItem(UINT id, const std::wstring& text, bool checked = false, bool enabled = true)
+{
+    g_trayMenuItems.push_back({ id, text, checked, enabled, false });
+}
+
+void AddTrayMenuSeparator()
+{
+    g_trayMenuItems.push_back({ 0, L"", false, false, true });
+}
+
 void ShowTrayMenu()
+{
+    g_menuTargetWindow = GetForegroundWindow();
+    RememberExternalForegroundWindow(g_menuTargetWindow);
+    POINT point{};
+    GetCursorPos(&point);
+
+    DestroyTrayMenu();
+    RegisterTrayMenuClass();
+    g_trayMenuItems.clear();
+    AddTrayMenuItem(IDM_SHOW_WINDOW, Text(L"显示主窗口", L"Show main window"));
+    AddTrayMenuSeparator();
+    AddTrayMenuItem(0, g_inGameProtection ? Text(L"状态：游戏保护中", L"Status: Protecting game") : Text(L"状态：普通", L"Status: Normal"), false, false);
+    AddTrayMenuItem(IDM_PROTECTION, g_protectionEnabled ? Text(L"保护模式：开启", L"Protection: On") : Text(L"保护模式：关闭", L"Protection: Off"), g_protectionEnabled);
+    AddTrayMenuItem(IDM_AUTO_DETECT, g_autoDetectEnabled ? Text(L"自动检测：开启", L"Auto detect: On") : Text(L"自动检测：关闭", L"Auto detect: Off"), g_autoDetectEnabled);
+    AddTrayMenuItem(IDM_WINDOWS_KEY_GUARD, g_windowsKeyGuardEnabled ? Text(L"Win 键：禁用", L"Windows key: Disabled") : Text(L"Win 键：启用", L"Windows key: Enabled"), g_windowsKeyGuardEnabled);
+    AddTrayMenuSeparator();
+    AddTrayMenuItem(IDM_SWITCH_ENGLISH, Text(L"切换输入法到英文", L"Switch input to English"));
+    AddTrayMenuItem(IDM_SWITCH_CHINESE, Text(L"切换输入法到中文", L"Switch input to Chinese"));
+    AddTrayMenuSeparator();
+    AddTrayMenuItem(IDM_ADD_CURRENT_GAME, Text(L"添加受保护程序", L"Add protected program"));
+    AddTrayMenuItem(IDM_ADD_GAME_FILE, Text(L"浏览添加受保护程序...", L"Browse to add protected program..."));
+    AddTrayMenuSeparator();
+    const bool startupEnabled = IsStartupEnabled();
+    AddTrayMenuItem(IDM_STARTUP, startupEnabled ? Text(L"开机启动：开启", L"Startup: On") : Text(L"开机启动：关闭", L"Startup: Off"), startupEnabled);
+    AddTrayMenuItem(IDM_NOTIFICATIONS, g_notificationsEnabled ? Text(L"系统通知：开启", L"System notifications: On") : Text(L"系统通知：关闭", L"System notifications: Off"), g_notificationsEnabled);
+    AddTrayMenuItem(IDM_OVERLAY_NOTIFICATIONS, g_overlayNotificationsEnabled ? Text(L"Overlay 通知：开启", L"Overlay notifications: On") : Text(L"Overlay 通知：关闭", L"Overlay notifications: Off"), g_overlayNotificationsEnabled);
+    AddTrayMenuSeparator();
+    AddTrayMenuItem(IDM_EXIT, Text(L"退出", L"Exit"));
+
+    int menuHeight = Scale(20);
+    for (const auto& item : g_trayMenuItems)
+    {
+        menuHeight += TrayMenuItemHeight(item);
+    }
+    const int menuWidth = Scale(292);
+    HMONITOR monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{ sizeof(monitorInfo) };
+    GetMonitorInfoW(monitor, &monitorInfo);
+    int x = point.x;
+    int y = point.y - menuHeight;
+    if (x + menuWidth > monitorInfo.rcWork.right)
+    {
+        x = monitorInfo.rcWork.right - menuWidth - Scale(6);
+    }
+    if (y < monitorInfo.rcWork.top)
+    {
+        y = point.y + Scale(8);
+    }
+
+    g_trayMenuHover = -1;
+    g_trayMenuWindow = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        kTrayMenuClass,
+        L"",
+        WS_POPUP,
+        x,
+        y,
+        menuWidth,
+        menuHeight,
+        g_hWnd,
+        nullptr,
+        g_hInst,
+        nullptr);
+    if (g_trayMenuWindow)
+    {
+        SetWindowPos(g_trayMenuWindow, HWND_TOPMOST, x, y, menuWidth, menuHeight, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        SetFocus(g_trayMenuWindow);
+    }
+}
+
+void ShowLegacyTrayMenu()
 {
     g_menuTargetWindow = GetForegroundWindow();
     RememberExternalForegroundWindow(g_menuTargetWindow);

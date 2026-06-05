@@ -1,6 +1,8 @@
 #include "ThemeManager.h"
 
+#include "GameProtection.h"
 #include "Localization.h"
+#include "Resource.h"
 
 #include <dwmapi.h>
 #include <strsafe.h>
@@ -109,18 +111,18 @@ void RebuildResources()
     g_dark = ResolveDarkTheme();
     if (g_dark)
     {
-        g_windowColor = RGB(32, 32, 32);
-        g_surfaceColor = RGB(43, 43, 43);
-        g_cardColor = RGB(43, 43, 43);
-        g_buttonColor = RGB(58, 58, 58);
-        g_buttonHotColor = RGB(72, 72, 72);
-        g_buttonPressedColor = RGB(85, 85, 85);
-        g_textColor = RGB(230, 230, 230);
-        g_mutedTextColor = RGB(184, 184, 184);
-        g_disabledTextColor = RGB(122, 122, 122);
-        g_borderColor = RGB(82, 82, 82);
-        g_accentColor = RGB(86, 156, 214);
-        g_selectedColor = RGB(52, 80, 112);
+        g_windowColor = RGB(17, 24, 39);
+        g_surfaceColor = RGB(31, 41, 55);
+        g_cardColor = RGB(31, 41, 55);
+        g_buttonColor = RGB(31, 41, 55);
+        g_buttonHotColor = RGB(38, 54, 73);
+        g_buttonPressedColor = RGB(43, 65, 88);
+        g_textColor = RGB(243, 244, 246);
+        g_mutedTextColor = RGB(156, 163, 175);
+        g_disabledTextColor = RGB(107, 114, 128);
+        g_borderColor = RGB(55, 65, 81);
+        g_accentColor = RGB(34, 197, 94);
+        g_selectedColor = RGB(22, 101, 52);
     }
     else
     {
@@ -310,6 +312,7 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     const bool pressed = (item.itemState & ODS_SELECTED) != 0;
     const bool hot = GetPropW(item.hwndItem, L"FFKeyLock.ButtonHot") != nullptr;
+    const int controlId = GetDlgCtrlID(item.hwndItem);
 
     COLORREF fill = g_buttonColor;
     if (disabled)
@@ -326,7 +329,13 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
     }
 
     RECT rect = item.rcItem;
-    DrawRoundRect(item.hDC, rect, fill, hot && !disabled ? g_accentColor : g_borderColor, Scale(7));
+    const bool cardButton =
+        controlId == IDC_PROTECTION_BUTTON ||
+        controlId == IDC_AUTO_DETECT_BUTTON ||
+        controlId == IDC_STARTUP_BUTTON ||
+        controlId == IDC_WINDOWS_KEY_BUTTON;
+
+    DrawRoundRect(item.hDC, rect, fill, hot && !disabled ? g_accentColor : g_borderColor, Scale(cardButton ? 12 : 8));
 
     wchar_t text[256]{};
     GetWindowTextW(item.hwndItem, text, static_cast<int>(std::size(text)));
@@ -338,7 +347,80 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
     {
         OffsetRect(&rect, 1, 1);
     }
-    DrawTextW(item.hDC, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    if (cardButton)
+    {
+        const wchar_t* icon = L"";
+        const wchar_t* title = text;
+        const wchar_t* subtitle = L"";
+        bool on = false;
+        switch (controlId)
+        {
+        case IDC_PROTECTION_BUTTON:
+            icon = L"盾";
+            title = g_protectionEnabled ? Text(L"关闭保护模式", L"Disable protection") : Text(L"开启保护模式", L"Enable protection");
+            subtitle = g_protectionEnabled ? Text(L"暂停所有保护", L"Pause every protection") : Text(L"启用所有保护功能", L"Enable every protection");
+            on = g_protectionEnabled;
+            break;
+        case IDC_AUTO_DETECT_BUTTON:
+            icon = L"检";
+            title = g_autoDetectEnabled ? Text(L"禁用自动检测", L"Disable auto detect") : Text(L"启用自动检测", L"Enable auto detect");
+            subtitle = g_autoDetectEnabled ? Text(L"停止进程监控", L"Stop process monitoring") : Text(L"检测游戏自动开启保护", L"Detect games automatically");
+            on = g_autoDetectEnabled;
+            break;
+        case IDC_STARTUP_BUTTON:
+            icon = L"启";
+            title = IsStartupEnabled() ? Text(L"关闭开机启动", L"Disable startup") : Text(L"开启开机启动", L"Enable startup");
+            subtitle = Text(L"系统启动时自动运行", L"Run when Windows starts");
+            on = IsStartupEnabled();
+            break;
+        case IDC_WINDOWS_KEY_BUTTON:
+            icon = L"Win";
+            title = g_windowsKeyGuardEnabled ? Text(L"启用 Win 键", L"Enable Win key") : Text(L"禁用 Win 键", L"Disable Win key");
+            subtitle = Text(L"屏蔽 Win 键功能", L"Block Windows key");
+            on = g_windowsKeyGuardEnabled;
+            break;
+        }
+
+        RECT iconRect{ rect.left + Scale(20), rect.top + Scale(18), rect.left + Scale(54), rect.top + Scale(52) };
+        DrawRoundRect(item.hDC, iconRect, on ? RGB(22, 101, 52) : RGB(55, 65, 81), on ? g_accentColor : g_borderColor, Scale(17));
+        SetTextColor(item.hDC, on ? g_accentColor : g_mutedTextColor);
+        DrawTextW(item.hDC, icon, -1, &iconRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        RECT titleRect{ rect.left + Scale(68), rect.top + Scale(20), rect.right - Scale(16), rect.top + Scale(48) };
+        SetTextColor(item.hDC, disabled ? g_disabledTextColor : g_textColor);
+        DrawTextW(item.hDC, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        RECT subtitleRect{ rect.left + Scale(68), rect.top + Scale(48), rect.right - Scale(16), rect.bottom - Scale(18) };
+        SetTextColor(item.hDC, disabled ? g_disabledTextColor : g_mutedTextColor);
+        DrawTextW(item.hDC, subtitle, -1, &subtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    else
+    {
+        const wchar_t* label = text;
+        switch (controlId)
+        {
+        case IDC_BROWSE_PROTECTED_BUTTON:
+            label = Text(L"浏览列表", L"Browse list");
+            break;
+        case IDC_ADD_GAME_BUTTON:
+            label = Text(L"添加程序", L"Add program");
+            break;
+        case IDC_ADD_FILE_BUTTON:
+            label = Text(L"浏览程序", L"Browse program");
+            break;
+        case IDC_DELETE_GAME_BUTTON:
+            label = Text(L"删除程序", L"Delete program");
+            break;
+        case IDC_SWITCH_EN_BUTTON:
+            label = Text(L"切换为英文", L"English");
+            break;
+        case IDC_SWITCH_CN_BUTTON:
+            label = Text(L"切换为中文", L"Chinese");
+            break;
+        }
+        DrawTextW(item.hDC, label, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
     SelectObject(item.hDC, oldFont);
 }
 
