@@ -2,3 +2,4 @@
 
 IDI_FFKEYLOCK ICON "FFKeyLock.ico"
 IDI_SMALL ICON "FFKeyLock.ico"
+1 RT_MANIFEST "FFKeyLock.manifest"

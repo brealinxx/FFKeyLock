@@ -151,9 +151,12 @@
     <ClInclude Include="InputLanguage.h" />
     <ClInclude Include="Localization.h" />
     <ClInclude Include="MainWindow.h" />
+    <ClInclude Include="NotificationIdentity.h" />
+    <ClInclude Include="OverlayNotificationManager.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="StringUtils.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="ThemeManager.h" />
     <ClInclude Include="TrayIcon.h" />
     <ClInclude Include="WindowsKeyGuard.h" />
   </ItemGroup>
@@ -165,7 +168,10 @@
     <ClCompile Include="InputLanguage.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="MainWindow.cpp" />
+    <ClCompile Include="NotificationIdentity.cpp" />
+    <ClCompile Include="OverlayNotificationManager.cpp" />
     <ClCompile Include="StringUtils.cpp" />
+    <ClCompile Include="ThemeManager.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
     <ClCompile Include="WindowsKeyGuard.cpp" />
   </ItemGroup>

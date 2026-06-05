@@ -29,6 +29,14 @@ void SwitchToChinese(HWND targetWindow)
     RequestInputLanguage(targetWindow ? targetWindow : GetForegroundWindow(), chinese);
 }
 
+void ApplySavedLayout(HWND fallbackWindow)
+{
+    if (g_savedLayout)
+    {
+        RequestInputLanguage(IsWindow(g_savedWindow) ? g_savedWindow : fallbackWindow, g_savedLayout);
+    }
+}
+
 void RestoreSavedLayout()
 {
     if (g_savedLayout)

@@ -2,6 +2,7 @@
 
 #include "AppState.h"
 #include "Config.h"
+#include "GameProtection.h"
 #include "Localization.h"
 #include "MainWindow.h"
 #include "TrayIcon.h"
@@ -23,13 +24,22 @@ LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
         }
     }
 
+    if (code == HC_ACTION && g_protectionEnabled && g_inGameProtection)
+    {
+        const auto* keyboard = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+        if (keyboard && keyboard->vkCode == VK_RETURN && wParam == WM_KEYDOWN && !(keyboard->flags & LLKHF_INJECTED))
+        {
+            ToggleGameChatInputMode();
+        }
+    }
+
     return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
 }
 }
 
 bool ApplyWindowsKeyGuard()
 {
-    if (!g_windowsKeyGuardEnabled)
+    if (!g_windowsKeyGuardEnabled && !g_protectionEnabled)
     {
         DisableWindowsKeyGuard();
         return true;

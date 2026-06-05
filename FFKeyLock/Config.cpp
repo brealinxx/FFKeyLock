@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <unordered_map>
 #include <vector>
 
 namespace FFKeyLock
@@ -76,6 +77,57 @@ std::wstring JoinGames()
     }
     return joined;
 }
+
+std::unordered_map<std::wstring, std::wstring> SplitGamePaths(const std::wstring& value)
+{
+    std::unordered_map<std::wstring, std::wstring> paths;
+    size_t start = 0;
+    while (start <= value.size())
+    {
+        const size_t end = value.find(L'|', start);
+        std::wstring item = Trim(value.substr(start, end == std::wstring::npos ? end : end - start));
+        const size_t separator = item.find(L'=');
+        if (separator != std::wstring::npos)
+        {
+            std::wstring exe = ToLower(Trim(item.substr(0, separator)));
+            std::wstring path = Trim(item.substr(separator + 1));
+            if (!exe.empty() && !path.empty())
+            {
+                paths[exe] = path;
+            }
+        }
+
+        if (end == std::wstring::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+
+    return paths;
+}
+
+std::wstring JoinGamePaths()
+{
+    std::wstring joined;
+    for (const auto& game : g_gameExeNames)
+    {
+        const auto path = g_gameExePaths.find(game);
+        if (path == g_gameExePaths.end() || path->second.empty())
+        {
+            continue;
+        }
+
+        if (!joined.empty())
+        {
+            joined += L"|";
+        }
+        joined += game;
+        joined += L"=";
+        joined += path->second;
+    }
+    return joined;
+}
 }
 
 std::wstring GetCurrentExePath()
@@ -97,8 +149,21 @@ void SaveConfig()
     WritePrivateProfileStringW(kConfigSection, kProtectionKey, g_protectionEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kAutoDetectKey, g_autoDetectEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kWindowsKeyGuardKey, g_windowsKeyGuardEnabled ? L"1" : L"0", g_configPath.c_str());
+    WritePrivateProfileStringW(kConfigSection, kNotificationsKey, g_notificationsEnabled ? L"1" : L"0", g_configPath.c_str());
+    WritePrivateProfileStringW(kConfigSection, kOverlayNotificationsKey, g_overlayNotificationsEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kLanguageKey, IsEnglish() ? L"en" : L"zh", g_configPath.c_str());
+    const wchar_t* theme = L"system";
+    if (g_themePreference == ThemePreference::Light)
+    {
+        theme = L"light";
+    }
+    else if (g_themePreference == ThemePreference::Dark)
+    {
+        theme = L"dark";
+    }
+    WritePrivateProfileStringW(kConfigSection, kThemeKey, theme, g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kGamesKey, JoinGames().c_str(), g_configPath.c_str());
+    WritePrivateProfileStringW(kConfigSection, kGamePathsKey, JoinGamePaths().c_str(), g_configPath.c_str());
 }
 
 void LoadConfig()
@@ -107,6 +172,8 @@ void LoadConfig()
     g_protectionEnabled = GetPrivateProfileIntW(kConfigSection, kProtectionKey, 1, g_configPath.c_str()) != 0;
     g_autoDetectEnabled = GetPrivateProfileIntW(kConfigSection, kAutoDetectKey, 1, g_configPath.c_str()) != 0;
     g_windowsKeyGuardEnabled = GetPrivateProfileIntW(kConfigSection, kWindowsKeyGuardKey, 0, g_configPath.c_str()) != 0;
+    g_notificationsEnabled = GetPrivateProfileIntW(kConfigSection, kNotificationsKey, 1, g_configPath.c_str()) != 0;
+    g_overlayNotificationsEnabled = GetPrivateProfileIntW(kConfigSection, kOverlayNotificationsKey, 1, g_configPath.c_str()) != 0;
 
     wchar_t language[16]{};
     GetPrivateProfileStringW(kConfigSection, kLanguageKey, L"zh", language, static_cast<DWORD>(std::size(language)), g_configPath.c_str());
@@ -114,9 +181,28 @@ void LoadConfig()
         ? UiLanguage::English
         : UiLanguage::Chinese;
 
+    wchar_t theme[16]{};
+    GetPrivateProfileStringW(kConfigSection, kThemeKey, L"system", theme, static_cast<DWORD>(std::size(theme)), g_configPath.c_str());
+    if (_wcsicmp(theme, L"dark") == 0)
+    {
+        g_themePreference = ThemePreference::Dark;
+    }
+    else if (_wcsicmp(theme, L"light") == 0)
+    {
+        g_themePreference = ThemePreference::Light;
+    }
+    else
+    {
+        g_themePreference = ThemePreference::System;
+    }
+
     wchar_t buffer[8192]{};
     GetPrivateProfileStringW(kConfigSection, kGamesKey, L"", buffer, static_cast<DWORD>(std::size(buffer)), g_configPath.c_str());
     g_gameExeNames = SplitGames(buffer);
+
+    wchar_t pathBuffer[16384]{};
+    GetPrivateProfileStringW(kConfigSection, kGamePathsKey, L"", pathBuffer, static_cast<DWORD>(std::size(pathBuffer)), g_configPath.c_str());
+    g_gameExePaths = SplitGamePaths(pathBuffer);
 
     if (g_gameExeNames.empty())
     {

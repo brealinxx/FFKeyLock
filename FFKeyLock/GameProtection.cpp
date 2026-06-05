@@ -5,6 +5,7 @@
 #include "InputLanguage.h"
 #include "Localization.h"
 #include "MainWindow.h"
+#include "OverlayNotificationManager.h"
 #include "StringUtils.h"
 #include "TrayIcon.h"
 
@@ -48,6 +49,39 @@ std::wstring GetProcessExeName(HWND hwnd)
     return GetExeNameFromPath(path);
 }
 
+std::wstring GetProcessExePath(HWND hwnd)
+{
+    if (!hwnd)
+    {
+        return L"";
+    }
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+    if (!processId)
+    {
+        return L"";
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process)
+    {
+        return L"";
+    }
+
+    std::wstring path(MAX_PATH, L'\0');
+    DWORD size = static_cast<DWORD>(path.size());
+    if (!QueryFullProcessImageNameW(process, 0, path.data(), &size))
+    {
+        CloseHandle(process);
+        return L"";
+    }
+
+    CloseHandle(process);
+    path.resize(size);
+    return path;
+}
+
 std::wstring GetForegroundProcessExeName(HWND* foregroundWindow = nullptr)
 {
     HWND hwnd = GetForegroundWindow();
@@ -75,8 +109,10 @@ void EnterGameProtection(HWND foregroundWindow)
     g_savedLayout = threadId ? GetKeyboardLayout(threadId) : GetKeyboardLayout(0);
     g_savedWindow = foregroundWindow;
     g_inGameProtection = true;
+    g_chatInputSuspended = false;
+    g_chatInputSuspendUntil = 0;
     SwitchToEnglish(foregroundWindow);
-    ShowTrayNotification(L"FFKeyLock", Text(L"已进入游戏保护，输入法已切换为英文。", L"Game protection is active. Input language switched to English."));
+    ShowTrayNotification(L"FFKeyLock", Text(L"已进入保护模式，输入法已锁定为英文。", L"Protection is active. Input language is locked to English."), true);
     UpdateMainWindow();
 }
 }
@@ -90,6 +126,8 @@ void LeaveGameProtection()
 
     RestoreSavedLayout();
     g_inGameProtection = false;
+    g_chatInputSuspended = false;
+    g_chatInputSuspendUntil = 0;
     ShowTrayNotification(L"FFKeyLock", Text(L"已离开游戏窗口，输入法状态已恢复。", L"Left the game window. Input language has been restored."));
     UpdateMainWindow();
 }
@@ -108,6 +146,7 @@ void DetectForegroundGame()
 
     if (!exeName.empty() && IsGameExe(exeName))
     {
+        ResumeGameProtectionAfterChatTimeout();
         EnterGameProtection(foregroundWindow);
     }
     else
@@ -158,14 +197,16 @@ void SetStartupEnabled(bool enabled)
 bool AddGameExeName(std::wstring exeName)
 {
     exeName = Trim(exeName);
+    std::wstring exePath;
     if (exeName.empty())
     {
-        ShowTrayNotification(L"FFKeyLock", Text(L"请输入或选择有效的游戏程序。", L"Enter or select a valid game executable."));
+        ShowTrayNotification(L"FFKeyLock", Text(L"请输入或选择有效的受保护程序。", L"Enter or select a valid protected executable."));
         return false;
     }
 
     if (exeName.find(L'\\') != std::wstring::npos || exeName.find(L'/') != std::wstring::npos)
     {
+        exePath = exeName;
         exeName = GetExeNameFromPath(exeName);
     }
     else
@@ -180,32 +221,95 @@ bool AddGameExeName(std::wstring exeName)
 
     if (exeName == ToLower(std::filesystem::path(GetCurrentExePath()).filename().wstring()))
     {
-        ShowTrayNotification(L"FFKeyLock", Text(L"不能把 FFKeyLock 自己添加为游戏。", L"FFKeyLock cannot be added as a game."));
+        ShowTrayNotification(L"FFKeyLock", Text(L"不能把 FFKeyLock 自己添加为受保护程序。", L"FFKeyLock cannot be added as a protected program."));
         return false;
     }
 
     if (IsGameExe(exeName))
     {
-        ShowTrayNotification(L"FFKeyLock", (std::wstring(Text(L"游戏列表中已存在：", L"Already in game list: ")) + exeName).c_str());
+        if (!exePath.empty())
+        {
+            g_gameExePaths[exeName] = exePath;
+            SaveConfig();
+        }
+        ShowTrayNotification(L"FFKeyLock", (std::wstring(Text(L"保护列表中已存在：", L"Already in protected list: ")) + exeName).c_str());
         return false;
     }
 
     g_gameExeNames.push_back(exeName);
+    if (!exePath.empty())
+    {
+        g_gameExePaths[exeName] = exePath;
+    }
     SaveConfig();
-    ShowTrayNotification(L"FFKeyLock", (std::wstring(Text(L"已添加游戏程序：", L"Added game executable: ")) + exeName).c_str());
+    ShowTrayNotification(L"FFKeyLock", (std::wstring(Text(L"已添加受保护程序：", L"Added protected executable: ")) + exeName).c_str());
     UpdateMainWindow();
     return true;
 }
 
 void AddProgramAsGame(HWND targetWindow)
 {
-    const std::wstring exeName = GetProcessExeName(targetWindow);
-    if (exeName.empty())
+    const std::wstring exePath = GetProcessExePath(targetWindow);
+    if (exePath.empty())
     {
         ShowTrayNotification(L"FFKeyLock", Text(L"没有可添加的前台程序。", L"No foreground program can be added."));
         return;
     }
 
-    AddGameExeName(exeName);
+    AddGameExeName(exePath);
+}
+
+void ToggleGameChatInputMode()
+{
+    if (!g_inGameProtection)
+    {
+        return;
+    }
+
+    HWND foregroundWindow = nullptr;
+    const std::wstring exeName = GetForegroundProcessExeName(&foregroundWindow);
+    if (exeName.empty() || !IsGameExe(exeName))
+    {
+        return;
+    }
+
+    HWND targetWindow = IsWindow(g_savedWindow) ? g_savedWindow : foregroundWindow;
+    if (!g_chatInputSuspended)
+    {
+        g_chatInputSuspended = true;
+        g_chatInputSuspendUntil = GetTickCount() + 12000;
+        ApplySavedLayout(targetWindow);
+        OverlayNotificationManager::ShowInfo(
+            Text(L"输入法已恢复", L"Input restored"),
+            Text(L"聊天输入中", L"Chat input"));
+    }
+    else
+    {
+        g_chatInputSuspended = false;
+        g_chatInputSuspendUntil = 0;
+        SwitchToEnglish(targetWindow);
+        OverlayNotificationManager::ShowSuccess(
+            Text(L"保护已恢复", L"Protection restored"),
+            Text(L"输入法已锁定英文", L"English locked"));
+    }
+    UpdateMainWindow();
+}
+
+void ResumeGameProtectionAfterChatTimeout()
+{
+    if (!g_inGameProtection || !g_chatInputSuspended || g_chatInputSuspendUntil == 0)
+    {
+        return;
+    }
+
+    if (static_cast<LONG>(GetTickCount() - g_chatInputSuspendUntil) < 0)
+    {
+        return;
+    }
+
+    g_chatInputSuspended = false;
+    g_chatInputSuspendUntil = 0;
+    SwitchToEnglish(IsWindow(g_savedWindow) ? g_savedWindow : GetForegroundWindow());
+    UpdateMainWindow();
 }
 }

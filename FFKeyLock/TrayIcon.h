@@ -6,6 +6,7 @@ namespace FFKeyLock
 {
 HICON LoadAppIcon(int width, int height);
 void ShowTrayNotification(const wchar_t* title, const wchar_t* message);
+void ShowTrayNotification(const wchar_t* title, const wchar_t* message, bool prominent);
 void AddTrayIcon();
 void RemoveTrayIcon();
 }
