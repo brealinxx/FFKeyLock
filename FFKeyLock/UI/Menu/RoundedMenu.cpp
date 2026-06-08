@@ -313,6 +313,11 @@ int HitTest(MenuState& state, POINT point)
 
 void OpenSubmenu(MenuState* state, int index);
 
+void RedrawMenu(HWND hwnd)
+{
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+}
+
 void ActivateItem(MenuState* state, int index)
 {
     if (!state || index < 0 || index >= static_cast<int>(state->items.size()))
@@ -384,7 +389,7 @@ void MoveHot(MenuState* state, int delta)
         if (IsInteractive(state->items[index]))
         {
             state->hotIndex = index;
-            InvalidateRect(state->hwnd, nullptr, FALSE);
+            RedrawMenu(state->hwnd);
             return;
         }
     }
@@ -424,7 +429,7 @@ LRESULT CALLBACK RoundedMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             if (state->hotIndex != nextHot)
             {
                 state->hotIndex = nextHot;
-                InvalidateRect(hwnd, nullptr, FALSE);
+                RedrawMenu(hwnd);
                 if (nextHot >= 0 && !state->items[nextHot].submenu.empty())
                 {
                     OpenSubmenu(state, nextHot);
@@ -439,7 +444,7 @@ LRESULT CALLBACK RoundedMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             const int hit = HitTest(*state, point);
             state->pressedIndex = hit >= 0 && IsInteractive(state->items[hit]) ? hit : -1;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            RedrawMenu(hwnd);
         }
         SetCapture(hwnd);
         return 0;
@@ -451,7 +456,7 @@ LRESULT CALLBACK RoundedMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             const int hit = HitTest(*state, point);
             state->pressedIndex = -1;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            RedrawMenu(hwnd);
             if (hit >= 0)
             {
                 ActivateItem(state, hit);

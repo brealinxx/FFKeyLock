@@ -8,7 +8,13 @@ namespace
 {
 void RequestInputLanguage(HWND targetWindow, HKL layout)
 {
-    if (!targetWindow || !layout)
+    if (!layout)
+    {
+        return;
+    }
+
+    ActivateKeyboardLayout(layout, KLF_SETFORPROCESS);
+    if (!targetWindow)
     {
         return;
     }

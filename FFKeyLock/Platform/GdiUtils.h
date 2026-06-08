@@ -6,6 +6,27 @@ namespace FFKeyLock
 {
 namespace GdiUtils
 {
+class BufferedPaint
+{
+public:
+    BufferedPaint(HDC target, const RECT& rect);
+    ~BufferedPaint();
+
+    BufferedPaint(const BufferedPaint&) = delete;
+    BufferedPaint& operator=(const BufferedPaint&) = delete;
+
+    HDC Dc() const;
+    bool IsValid() const;
+
+private:
+    HDC target_ = nullptr;
+    HDC memory_ = nullptr;
+    HBITMAP bitmap_ = nullptr;
+    HGDIOBJ oldBitmap_ = nullptr;
+    RECT rect_{};
+    SIZE size_{};
+};
+
 class SelectObjectScope
 {
 public:

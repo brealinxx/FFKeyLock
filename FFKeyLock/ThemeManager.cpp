@@ -1,6 +1,7 @@
 #include "ThemeManager.h"
 
 #include "Localization.h"
+#include "Platform/GdiUtils.h"
 
 #include <dwmapi.h>
 #include <strsafe.h>
@@ -16,6 +17,7 @@ namespace FFKeyLock
 namespace
 {
 constexpr wchar_t kButtonSubclassName[] = L"FFKeyLock.ThemeButtonSubclass";
+constexpr wchar_t kOwnerDrawGroupBoxName[] = L"FFKeyLock.OwnerDrawGroupBox";
 
 UINT g_dpi = USER_DEFAULT_SCREEN_DPI;
 HFONT g_uiFont = nullptr;
@@ -200,6 +202,7 @@ LRESULT CALLBACK ButtonSubclassProc(HWND button, UINT message, WPARAM wParam, LP
     case WM_NCDESTROY:
         RemovePropW(button, L"FFKeyLock.ButtonHot");
         RemovePropW(button, kButtonSubclassName);
+        RemovePropW(button, kOwnerDrawGroupBoxName);
         RemoveWindowSubclass(button, ButtonSubclassProc, subclassId);
         break;
     }
@@ -217,6 +220,19 @@ void ApplyControlTheme(HWND hwnd)
     if (_wcsicmp(className, L"Button") == 0)
     {
         const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if ((style & BS_GROUPBOX) == BS_GROUPBOX)
+        {
+            SetPropW(hwnd, kOwnerDrawGroupBoxName, reinterpret_cast<HANDLE>(1));
+            SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~BS_TYPEMASK) | BS_OWNERDRAW);
+            if (!GetPropW(hwnd, kButtonSubclassName))
+            {
+                SetPropW(hwnd, kButtonSubclassName, reinterpret_cast<HANDLE>(1));
+                SetWindowSubclass(hwnd, ButtonSubclassProc, 1, 0);
+            }
+            SetWindowTheme(hwnd, g_dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+            InvalidateRect(hwnd, nullptr, TRUE);
+            return;
+        }
         SetWindowLongPtrW(hwnd, GWL_STYLE, style | BS_OWNERDRAW);
         if (!GetPropW(hwnd, kButtonSubclassName))
         {
@@ -326,14 +342,54 @@ HBRUSH ThemeManager::HandleCtlColor(HWND, HDC hdc, HWND)
     SetBkMode(hdc, OPAQUE);
     SetBkColor(hdc, g_surfaceColor);
     SetTextColor(hdc, g_textColor);
-    return g_surfaceBrush ? g_surfaceBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    return g_surfaceBrush ? g_surfaceBrush : reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
 }
 
 void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
 {
+    GdiUtils::BufferedPaint buffer(item.hDC, item.rcItem);
+    HDC hdc = buffer.Dc();
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     const bool pressed = (item.itemState & ODS_SELECTED) != 0;
     const bool hot = GetPropW(item.hwndItem, L"FFKeyLock.ButtonHot") != nullptr;
+
+    if (GetPropW(item.hwndItem, kOwnerDrawGroupBoxName) != nullptr)
+    {
+        RECT rect = item.rcItem;
+        HBRUSH background = CreateSolidBrush(g_windowColor);
+        FillRect(hdc, &rect, background);
+        DeleteObject(background);
+
+        wchar_t text[256]{};
+        GetWindowTextW(item.hwndItem, text, static_cast<int>(std::size(text)));
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, g_textColor);
+        GdiUtils::SelectObjectScope fontScope(hdc, g_uiFont ? g_uiFont : GetStockObject(DEFAULT_GUI_FONT));
+
+        RECT textRect = rect;
+        textRect.left += Scale(10);
+        textRect.right -= Scale(10);
+        textRect.bottom = textRect.top + Scale(22);
+        SIZE textSize{};
+        GetTextExtentPoint32W(hdc, text, static_cast<int>(wcslen(text)), &textSize);
+
+        RECT borderRect = rect;
+        borderRect.top += Scale(9);
+        HPEN pen = CreatePen(PS_SOLID, 1, g_borderColor);
+        GdiUtils::SelectObjectScope penScope(hdc, pen);
+        HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        RoundRect(hdc, borderRect.left, borderRect.top, borderRect.right, borderRect.bottom, Scale(8), Scale(8));
+        SelectObject(hdc, oldBrush);
+        DeleteObject(pen);
+
+        RECT textBackground = textRect;
+        textBackground.right = textBackground.left + textSize.cx + Scale(8);
+        FillRect(hdc, &textBackground, background = CreateSolidBrush(g_windowColor));
+        DeleteObject(background);
+        DrawTextW(hdc, text, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        return;
+    }
 
     COLORREF fill = g_buttonColor;
     if (disabled)
@@ -350,20 +406,23 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
     }
 
     RECT rect = item.rcItem;
-    DrawRoundRect(item.hDC, rect, fill, hot && !disabled ? g_accentColor : g_borderColor, Scale(7));
+    HBRUSH background = CreateSolidBrush(g_windowColor);
+    FillRect(hdc, &rect, background);
+    DeleteObject(background);
+    DrawRoundRect(hdc, rect, fill, hot && !disabled ? g_accentColor : g_borderColor, Scale(7));
 
     wchar_t text[256]{};
     GetWindowTextW(item.hwndItem, text, static_cast<int>(std::size(text)));
 
-    SetBkMode(item.hDC, TRANSPARENT);
-    SetTextColor(item.hDC, disabled ? g_disabledTextColor : g_textColor);
-    HGDIOBJ oldFont = SelectObject(item.hDC, g_uiFont ? g_uiFont : GetStockObject(DEFAULT_GUI_FONT));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, disabled ? g_disabledTextColor : g_textColor);
+    HGDIOBJ oldFont = SelectObject(hdc, g_uiFont ? g_uiFont : GetStockObject(DEFAULT_GUI_FONT));
     if (pressed)
     {
         OffsetRect(&rect, 1, 1);
     }
-    DrawTextW(item.hDC, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    SelectObject(item.hDC, oldFont);
+    DrawTextW(hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    SelectObject(hdc, oldFont);
 }
 
 void ThemeManager::MeasureMenuItem(MEASUREITEMSTRUCT& item)
@@ -431,11 +490,13 @@ void ThemeManager::DrawListBoxItem(const DRAWITEMSTRUCT& item, const std::vector
         return;
     }
 
+    GdiUtils::BufferedPaint buffer(item.hDC, item.rcItem);
+    HDC hdc = buffer.Dc();
     const bool selected = (item.itemState & ODS_SELECTED) != 0;
     const COLORREF fill = selected ? g_selectedColor : g_surfaceColor;
     const COLORREF text = selected ? (g_dark ? RGB(255, 255, 255) : g_textColor) : g_textColor;
     HBRUSH brush = CreateSolidBrush(fill);
-    FillRect(item.hDC, &item.rcItem, brush);
+    FillRect(hdc, &item.rcItem, brush);
     DeleteObject(brush);
 
     if (item.itemID < items.size())
@@ -443,18 +504,18 @@ void ThemeManager::DrawListBoxItem(const DRAWITEMSTRUCT& item, const std::vector
         RECT textRect = item.rcItem;
         textRect.left += Scale(8);
         textRect.right -= Scale(8);
-        SetBkMode(item.hDC, TRANSPARENT);
-        SetTextColor(item.hDC, text);
-        HGDIOBJ oldFont = SelectObject(item.hDC, g_uiFont ? g_uiFont : GetStockObject(DEFAULT_GUI_FONT));
-        DrawTextW(item.hDC, items[item.itemID].c_str(), -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-        SelectObject(item.hDC, oldFont);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, text);
+        HGDIOBJ oldFont = SelectObject(hdc, g_uiFont ? g_uiFont : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextW(hdc, items[item.itemID].c_str(), -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        SelectObject(hdc, oldFont);
     }
 
     if (item.itemState & ODS_FOCUS)
     {
         RECT focusRect = item.rcItem;
         InflateRect(&focusRect, -1, -1);
-        DrawFocusRect(item.hDC, &focusRect);
+        DrawFocusRect(hdc, &focusRect);
     }
 }
 

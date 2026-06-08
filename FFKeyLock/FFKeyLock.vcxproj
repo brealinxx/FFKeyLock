@@ -160,6 +160,7 @@
     <ClInclude Include="targetver.h" />
     <ClInclude Include="ThemeManager.h" />
     <ClInclude Include="TrayIcon.h" />
+    <ClInclude Include="UI\Controls\ContentPanel.h" />
     <ClInclude Include="UI\Controls\RoundedButton.h" />
     <ClInclude Include="UI\Controls\ToggleSwitch.h" />
     <ClInclude Include="UI\Menu\RoundedMenu.h" />
@@ -180,6 +181,7 @@
     <ClCompile Include="StringUtils.cpp" />
     <ClCompile Include="ThemeManager.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="UI\Controls\ContentPanel.cpp" />
     <ClCompile Include="UI\Controls\RoundedButton.cpp" />
     <ClCompile Include="UI\Controls\ToggleSwitch.cpp" />
     <ClCompile Include="UI\Menu\RoundedMenu.cpp" />

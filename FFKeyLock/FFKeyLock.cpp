@@ -49,8 +49,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 
     RegisterMainWindowClass(hInstance);
     const UINT dpi = GetDpiForSystem();
-    const int windowWidth = MulDiv(720, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
-    const int windowHeight = MulDiv(560, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+    const int windowWidth = MulDiv(860, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+    const int windowHeight = MulDiv(620, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
     g_hWnd = CreateWindowExW(
         0,
         kAppName,

@@ -137,10 +137,13 @@ void DetectForegroundGame()
     HWND foregroundWindow = nullptr;
     const std::wstring exeName = GetForegroundProcessExeName(&foregroundWindow);
     RememberExternalForegroundWindow(foregroundWindow);
+    g_currentDetectedGameName = (!exeName.empty() && IsGameExe(exeName)) ? exeName : L"";
 
     if (!g_protectionEnabled || !g_autoDetectEnabled)
     {
+        g_currentDetectedGameName.clear();
         LeaveGameProtection();
+        UpdateMainWindow();
         return;
     }
 

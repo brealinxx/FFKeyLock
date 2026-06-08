@@ -32,12 +32,19 @@ void SetHot(HWND hwnd, bool hot)
     }
 }
 
+void RedrawToggle(HWND hwnd)
+{
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+}
+
 void Paint(HWND hwnd)
 {
     PAINTSTRUCT paint{};
     HDC hdc = BeginPaint(hwnd, &paint);
     RECT rect{};
     GetClientRect(hwnd, &rect);
+    GdiUtils::BufferedPaint buffer(hdc, rect);
+    HDC drawDc = buffer.Dc();
     const UINT dpi = DpiUtils::GetWindowDpi(hwnd);
     const bool enabled = IsWindowEnabled(hwnd) != FALSE;
     const bool checked = IsChecked(hwnd);
@@ -46,7 +53,11 @@ void Paint(HWND hwnd)
         ? ThemeManager::AccentColor()
         : (IsHot(hwnd) ? ThemeManager::ButtonHotColor() : ThemeManager::ButtonColor());
     const COLORREF border = checked ? ThemeManager::AccentColor() : ThemeManager::BorderColor();
-    GdiUtils::FillRoundRect(hdc, rect, enabled ? track : ThemeManager::SurfaceColor(), border, rect.bottom - rect.top);
+    HBRUSH background = CreateSolidBrush(ThemeManager::WindowColor());
+    FillRect(drawDc, &rect, background);
+    DeleteObject(background);
+
+    GdiUtils::FillRoundRect(drawDc, rect, enabled ? track : ThemeManager::SurfaceColor(), border, rect.bottom - rect.top);
 
     const int margin = DpiUtils::Scale(3, dpi);
     const int knobSize = (rect.bottom - rect.top) - margin * 2;
@@ -65,7 +76,7 @@ void Paint(HWND hwnd)
     }
 
     const COLORREF knobColor = enabled ? RGB(255, 255, 255) : ThemeManager::BorderColor();
-    GdiUtils::FillRoundRect(hdc, knob, knobColor, knobColor, knobSize);
+    GdiUtils::FillRoundRect(drawDc, knob, knobColor, knobColor, knobSize);
     EndPaint(hwnd, &paint);
 }
 
@@ -79,19 +90,22 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Paint(hwnd);
         return 0;
 
+    case WM_ERASEBKGND:
+        return TRUE;
+
     case WM_MOUSEMOVE:
         if (!IsHot(hwnd))
         {
             SetHot(hwnd, true);
             TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, hwnd, 0 };
             TrackMouseEvent(&track);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            RedrawToggle(hwnd);
         }
         return 0;
 
     case WM_MOUSELEAVE:
         SetHot(hwnd, false);
-        InvalidateRect(hwnd, nullptr, FALSE);
+        RedrawToggle(hwnd);
         return 0;
 
     case WM_LBUTTONUP:
@@ -108,7 +122,7 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_ENABLE:
-        InvalidateRect(hwnd, nullptr, TRUE);
+        RedrawToggle(hwnd);
         return 0;
 
     case WM_NCDESTROY:
@@ -147,7 +161,7 @@ HWND Create(HWND parent, int id, bool checked, int x, int y, int width, int heig
         0,
         ClassName,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_TABSTOP,
         x,
         y,
         width,
@@ -175,7 +189,7 @@ void SetChecked(HWND hwnd, bool checked)
     {
         RemovePropW(hwnd, kCheckedProp);
     }
-    InvalidateRect(hwnd, nullptr, FALSE);
+    RedrawToggle(hwnd);
 }
 }
 }

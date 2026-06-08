@@ -4,6 +4,65 @@ namespace FFKeyLock
 {
 namespace GdiUtils
 {
+BufferedPaint::BufferedPaint(HDC target, const RECT& rect)
+    : target_(target), rect_(rect)
+{
+    size_.cx = rect_.right - rect_.left;
+    size_.cy = rect_.bottom - rect_.top;
+    if (!target_ || size_.cx <= 0 || size_.cy <= 0)
+    {
+        return;
+    }
+
+    memory_ = CreateCompatibleDC(target_);
+    if (!memory_)
+    {
+        return;
+    }
+
+    bitmap_ = CreateCompatibleBitmap(target_, size_.cx, size_.cy);
+    if (!bitmap_)
+    {
+        DeleteDC(memory_);
+        memory_ = nullptr;
+        return;
+    }
+
+    oldBitmap_ = SelectObject(memory_, bitmap_);
+    SetViewportOrgEx(memory_, -rect_.left, -rect_.top, nullptr);
+}
+
+BufferedPaint::~BufferedPaint()
+{
+    if (target_ && memory_ && bitmap_)
+    {
+        SetViewportOrgEx(memory_, 0, 0, nullptr);
+        BitBlt(target_, rect_.left, rect_.top, size_.cx, size_.cy, memory_, 0, 0, SRCCOPY);
+    }
+    if (memory_ && oldBitmap_)
+    {
+        SelectObject(memory_, oldBitmap_);
+    }
+    if (bitmap_)
+    {
+        DeleteObject(bitmap_);
+    }
+    if (memory_)
+    {
+        DeleteDC(memory_);
+    }
+}
+
+HDC BufferedPaint::Dc() const
+{
+    return IsValid() ? memory_ : target_;
+}
+
+bool BufferedPaint::IsValid() const
+{
+    return memory_ && bitmap_;
+}
+
 SelectObjectScope::SelectObjectScope(HDC hdc, HGDIOBJ object)
     : hdc_(hdc), oldObject_(hdc && object ? SelectObject(hdc, object) : nullptr)
 {
