@@ -153,11 +153,16 @@
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="NotificationIdentity.h" />
     <ClInclude Include="OverlayNotificationManager.h" />
+    <ClInclude Include="Platform\DpiUtils.h" />
+    <ClInclude Include="Platform\GdiUtils.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="StringUtils.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="ThemeManager.h" />
     <ClInclude Include="TrayIcon.h" />
+    <ClInclude Include="UI\Controls\RoundedButton.h" />
+    <ClInclude Include="UI\Controls\ToggleSwitch.h" />
+    <ClInclude Include="UI\Menu\RoundedMenu.h" />
     <ClInclude Include="WindowsKeyGuard.h" />
   </ItemGroup>
   <ItemGroup>
@@ -170,9 +175,14 @@
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="NotificationIdentity.cpp" />
     <ClCompile Include="OverlayNotificationManager.cpp" />
+    <ClCompile Include="Platform\DpiUtils.cpp" />
+    <ClCompile Include="Platform\GdiUtils.cpp" />
     <ClCompile Include="StringUtils.cpp" />
     <ClCompile Include="ThemeManager.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="UI\Controls\RoundedButton.cpp" />
+    <ClCompile Include="UI\Controls\ToggleSwitch.cpp" />
+    <ClCompile Include="UI\Menu\RoundedMenu.cpp" />
     <ClCompile Include="WindowsKeyGuard.cpp" />
   </ItemGroup>
   <ItemGroup>

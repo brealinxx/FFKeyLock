@@ -31,7 +31,20 @@ public:
     static COLORREF SurfaceColor();
     static COLORREF TextColor();
     static COLORREF MutedTextColor();
+    static COLORREF DisabledTextColor();
     static COLORREF BorderColor();
+    static COLORREF AccentColor();
+    static COLORREF ButtonColor();
+    static COLORREF ButtonHotColor();
+    static COLORREF ButtonPressedColor();
+    static COLORREF MenuBarColor();
+    static COLORREF MenuBarHoverColor();
+    static COLORREF MenuBackgroundColor();
+    static COLORREF MenuHoverColor();
+    static COLORREF MenuPressedColor();
+    static COLORREF MenuBorderColor();
+    static COLORREF MenuSeparatorColor();
+    static COLORREF MenuIconColor();
     static bool IsDark();
 };
 }

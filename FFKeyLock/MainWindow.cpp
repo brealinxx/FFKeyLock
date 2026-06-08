@@ -7,6 +7,7 @@
 #include "Localization.h"
 #include "OverlayNotificationManager.h"
 #include "Resource.h"
+#include "UI/Menu/RoundedMenu.h"
 #include "ThemeManager.h"
 #include "TrayIcon.h"
 #include "WindowsKeyGuard.h"
@@ -18,8 +19,8 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace FFKeyLock
@@ -27,13 +28,20 @@ namespace FFKeyLock
 namespace
 {
 constexpr wchar_t kProtectedBrowserClass[] = L"FFKeyLockProtectedBrowser";
+constexpr wchar_t kMenuBarClass[] = L"FFKeyLockMenuBar";
 HWND g_protectedBrowserWindow = nullptr;
 HWND g_protectedBrowserList = nullptr;
-std::vector<std::unique_ptr<std::wstring>> g_menuTextStore;
+HWND g_menuBar = nullptr;
+std::vector<RECT> g_menuBarItems;
 
 int Scale(int value)
 {
     return ThemeManager::Scale(value);
+}
+
+int MenuBarHeight()
+{
+    return Scale(30);
 }
 
 void SetDefaultFont(HWND control)
@@ -58,7 +66,6 @@ void ApplyFonts()
         g_deleteGameButton,
         g_browseProtectedButton,
         g_gameList,
-        g_configText,
     };
 
     if (g_titleText)
@@ -82,7 +89,7 @@ HWND CreateControl(const wchar_t* className, const wchar_t* text, DWORD style, i
         text,
         WS_CHILD | WS_VISIBLE | style,
         Scale(x),
-        Scale(y),
+        Scale(y) + MenuBarHeight(),
         Scale(width),
         Scale(height),
         g_hWnd,
@@ -99,79 +106,281 @@ HWND CreateControl(const wchar_t* className, const wchar_t* text, DWORD style, i
 
 void RefreshProtectedBrowserList();
 
-std::wstring* StoreMenuText(const std::wstring& text)
+RoundedMenuItem MenuItem(UINT id, const std::wstring& text, const std::wstring& shortcut = L"", bool checked = false, bool enabled = true)
 {
-    g_menuTextStore.push_back(std::make_unique<std::wstring>(text));
-    return g_menuTextStore.back().get();
+    RoundedMenuItem item{};
+    item.id = id;
+    item.text = text;
+    item.shortcut = shortcut;
+    item.checked = checked;
+    item.enabled = enabled;
+    return item;
 }
 
-void ApplyMenuTheme(HMENU menu)
+RoundedMenuItem MenuTitle(const std::wstring& text)
 {
-    MENUINFO info{};
-    info.cbSize = sizeof(info);
-    info.fMask = MIM_BACKGROUND;
-    info.hbrBack = ThemeManager::SurfaceBrush();
-    SetMenuInfo(menu, &info);
+    RoundedMenuItem item{};
+    item.text = text;
+    item.title = true;
+    item.enabled = false;
+    return item;
 }
 
-void AppendThemedMenuItem(HMENU menu, UINT id, const std::wstring& text, bool checked = false, bool enabled = true)
+RoundedMenuItem MenuSeparator()
 {
-    AppendMenuW(
-        menu,
-        MF_OWNERDRAW | (checked ? MF_CHECKED : MF_UNCHECKED) | (enabled ? MF_ENABLED : MF_DISABLED),
-        id,
-        reinterpret_cast<LPCWSTR>(StoreMenuText(text)));
+    RoundedMenuItem item{};
+    item.separator = true;
+    item.enabled = false;
+    return item;
 }
 
-void AppendThemedMenuPopup(HMENU menu, HMENU popup, const std::wstring& text)
+RoundedMenuItem MenuSubmenu(const std::wstring& text, std::vector<RoundedMenuItem> submenu)
 {
-    ApplyMenuTheme(popup);
-    AppendMenuW(menu, MF_OWNERDRAW | MF_POPUP, reinterpret_cast<UINT_PTR>(popup), reinterpret_cast<LPCWSTR>(StoreMenuText(text)));
+    RoundedMenuItem item{};
+    item.text = text;
+    item.submenu = std::move(submenu);
+    return item;
 }
 
-HMENU CreateAppMenu()
+std::vector<RoundedMenuItem> BuildThemeMenu()
 {
-    g_menuTextStore.clear();
-    HMENU menuBar = CreateMenu();
-    HMENU settingsMenu = CreatePopupMenu();
-    HMENU languageMenu = CreatePopupMenu();
-    HMENU themeMenu = CreatePopupMenu();
-    HMENU notificationMenu = CreatePopupMenu();
-    HMENU helpMenu = CreatePopupMenu();
+    return {
+        MenuItem(IDM_THEME_LIGHT, Text(L"浅色", L"Light"), L"", g_themePreference == ThemePreference::Light),
+        MenuItem(IDM_THEME_DARK, Text(L"深色", L"Dark"), L"", g_themePreference == ThemePreference::Dark),
+        MenuItem(IDM_THEME_SYSTEM, Text(L"跟随系统", L"System"), L"", g_themePreference == ThemePreference::System),
+    };
+}
 
-    ApplyMenuTheme(menuBar);
-    ApplyMenuTheme(settingsMenu);
-    ApplyMenuTheme(languageMenu);
-    ApplyMenuTheme(themeMenu);
-    ApplyMenuTheme(notificationMenu);
-    ApplyMenuTheme(helpMenu);
+std::vector<RoundedMenuItem> BuildSettingsMenu()
+{
+    return {
+        MenuSubmenu(Text(L"主题", L"Theme"), BuildThemeMenu()),
+        MenuItem(IDM_OPEN_CONFIG_DIR, Text(L"打开配置目录", L"Open config directory")),
+        MenuItem(IDM_OPEN_LOG_DIR, Text(L"打开日志目录", L"Open log directory")),
+        MenuItem(IDM_STARTUP, Text(L"开机启动", L"Startup"), L"", IsStartupEnabled()),
+        MenuSeparator(),
+        MenuItem(IDM_RESET_CONFIG, Text(L"重置配置", L"Reset config")),
+        MenuSeparator(),
+        MenuItem(IDM_EXIT, Text(L"退出", L"Exit"), L"Alt+F4"),
+    };
+}
 
-    AppendThemedMenuItem(languageMenu, IDM_LANGUAGE_CHINESE, Text(L"中文", L"Chinese"), !IsEnglish());
-    AppendThemedMenuItem(languageMenu, IDM_LANGUAGE_ENGLISH, Text(L"English", L"English"), IsEnglish());
+std::vector<RoundedMenuItem> BuildNotificationsMenu()
+{
+    return {
+        MenuItem(IDM_TEST_NOTIFICATION, Text(L"显示测试通知", L"Show test notification")),
+        MenuItem(IDM_OVERLAY_NOTIFICATIONS, Text(L"开启 Overlay 通知", L"Enable Overlay notifications"), L"", g_overlayNotificationsEnabled),
+        MenuItem(IDM_NOTIFICATIONS, Text(L"开启系统 Toast 通知", L"Enable system Toast notifications"), L"", g_notificationsEnabled),
+        MenuItem(IDM_MUTE_NOTIFICATIONS, Text(L"静音通知", L"Mute notifications"), L"", !g_notificationsEnabled && !g_overlayNotificationsEnabled),
+    };
+}
 
-    AppendThemedMenuItem(themeMenu, IDM_THEME_LIGHT, Text(L"浅色", L"Light"), g_themePreference == ThemePreference::Light);
-    AppendThemedMenuItem(themeMenu, IDM_THEME_DARK, Text(L"深色", L"Dark"), g_themePreference == ThemePreference::Dark);
-    AppendThemedMenuItem(themeMenu, IDM_THEME_SYSTEM, Text(L"跟随系统", L"System"), g_themePreference == ThemePreference::System);
+std::vector<RoundedMenuItem> BuildHelpMenu()
+{
+    return {
+        MenuItem(IDM_HELP_USAGE, Text(L"使用说明", L"Usage")),
+        MenuItem(IDM_CHECK_UPDATES, Text(L"检查更新", L"Check updates")),
+        MenuItem(IDM_GITHUB_PROJECT, Text(L"GitHub 项目", L"GitHub project")),
+        MenuSeparator(),
+        MenuItem(IDM_ABOUT, Text(L"关于 FFKeyLock", L"About FFKeyLock")),
+    };
+}
 
-    AppendThemedMenuPopup(settingsMenu, languageMenu, Text(L"语言", L"Language"));
-    AppendThemedMenuPopup(settingsMenu, themeMenu, Text(L"主题", L"Theme"));
-    AppendMenuW(settingsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendThemedMenuItem(settingsMenu, IDM_WINDOWS_KEY_GUARD,
-        g_windowsKeyGuardEnabled ? Text(L"Win 键：禁用", L"Windows key: Disabled") : Text(L"Win 键：开启", L"Windows key: Enabled"), g_windowsKeyGuardEnabled);
-    AppendThemedMenuItem(settingsMenu, IDM_SWITCH_ENGLISH, Text(L"切换输入法到英文", L"Switch input to English"));
-    AppendThemedMenuItem(settingsMenu, IDM_SWITCH_CHINESE, Text(L"切换输入法到中文", L"Switch input to Chinese"));
+std::vector<RoundedMenuItem> BuildTrayMenu()
+{
+    return {
+        MenuTitle(L"FFKeyLock"),
+        MenuItem(IDM_PROTECTION, Text(L"启用保护模式", L"Enable protection mode"), L"", g_protectionEnabled),
+        MenuItem(IDM_AUTO_DETECT, g_autoDetectEnabled ? Text(L"自动检测：开启", L"Auto detect: On") : Text(L"自动检测：关闭", L"Auto detect: Off"), L"", g_autoDetectEnabled),
+        MenuItem(IDM_WINDOWS_KEY_GUARD, g_windowsKeyGuardEnabled ? Text(L"Win 键：禁用", L"Win key: Disabled") : Text(L"Win 键：开启", L"Win key: Enabled"), L"", g_windowsKeyGuardEnabled),
+        MenuSeparator(),
+        MenuItem(IDM_SHOW_SETTINGS, Text(L"设置...", L"Settings...")),
+        MenuItem(IDM_SHOW_WINDOW, Text(L"显示主窗口", L"Show main window")),
+        MenuItem(IDM_EXIT, Text(L"退出", L"Exit")),
+    };
+}
 
-    AppendThemedMenuItem(notificationMenu, IDM_NOTIFICATIONS,
-        g_notificationsEnabled ? Text(L"系统通知：开启", L"System notifications: On") : Text(L"系统通知：关闭", L"System notifications: Off"), g_notificationsEnabled);
-    AppendThemedMenuItem(notificationMenu, IDM_OVERLAY_NOTIFICATIONS,
-        g_overlayNotificationsEnabled ? Text(L"Overlay 通知：开启", L"Overlay notifications: On") : Text(L"Overlay 通知：关闭", L"Overlay notifications: Off"), g_overlayNotificationsEnabled);
+std::vector<RoundedMenuItem> BuildGameListContextMenu()
+{
+    return {
+        MenuItem(IDM_COPY_GAME_NAME, Text(L"复制名称", L"Copy name"), L"Ctrl+C"),
+        MenuItem(IDM_OPEN_GAME_FOLDER, Text(L"跳转到该程序文件夹", L"Open program folder")),
+    };
+}
 
-    AppendThemedMenuItem(helpMenu, IDM_ABOUT, Text(L"关于 FFKeyLock", L"About FFKeyLock"));
+void OpenFolderPath(const std::wstring& path)
+{
+    if (!path.empty())
+    {
+        ShellExecuteW(g_hWnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+}
 
-    AppendThemedMenuPopup(menuBar, settingsMenu, Text(L"设置", L"Settings"));
-    AppendThemedMenuPopup(menuBar, notificationMenu, Text(L"通知", L"Notifications"));
-    AppendThemedMenuPopup(menuBar, helpMenu, Text(L"帮助", L"Help"));
-    return menuBar;
+void OpenConfigDirectory()
+{
+    std::filesystem::path path(g_configPath);
+    OpenFolderPath(path.has_parent_path() ? path.parent_path().wstring() : std::filesystem::current_path().wstring());
+}
+
+void OpenLogDirectory()
+{
+    OpenConfigDirectory();
+}
+
+void ShowMenuBarPopup(int index)
+{
+    if (!g_menuBar || index < 0 || index >= static_cast<int>(g_menuBarItems.size()))
+    {
+        return;
+    }
+
+    std::vector<RoundedMenuItem> items;
+    if (index == 0)
+    {
+        items = BuildSettingsMenu();
+    }
+    else if (index == 1)
+    {
+        items = BuildNotificationsMenu();
+    }
+    else
+    {
+        items = BuildHelpMenu();
+    }
+
+    POINT anchor{ g_menuBarItems[index].left, g_menuBarItems[index].bottom };
+    ClientToScreen(g_menuBar, &anchor);
+    RoundedMenu::ShowAndDispatch(g_hWnd, anchor, items);
+    InvalidateRect(g_menuBar, nullptr, FALSE);
+}
+
+int HitTestMenuBarItem(POINT point)
+{
+    for (size_t i = 0; i < g_menuBarItems.size(); ++i)
+    {
+        if (PtInRect(&g_menuBarItems[i], point))
+        {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void PaintMenuBar(HWND hwnd)
+{
+    PAINTSTRUCT paint{};
+    HDC hdc = BeginPaint(hwnd, &paint);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    HBRUSH background = CreateSolidBrush(ThemeManager::MenuBarColor());
+    FillRect(hdc, &client, background);
+    DeleteObject(background);
+
+    HPEN linePen = CreatePen(PS_SOLID, 1, ThemeManager::MenuBorderColor());
+    HGDIOBJ oldPen = SelectObject(hdc, linePen);
+    MoveToEx(hdc, client.left, client.bottom - 1, nullptr);
+    LineTo(hdc, client.right, client.bottom - 1);
+    SelectObject(hdc, oldPen);
+    DeleteObject(linePen);
+
+    const wchar_t* labels[] = {
+        Text(L"设置", L"Settings"),
+        Text(L"通知", L"Notifications"),
+        Text(L"帮助", L"Help"),
+    };
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, ThemeManager::TextColor());
+    HGDIOBJ oldFont = SelectObject(hdc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
+    g_menuBarItems.clear();
+    int x = Scale(8);
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    ScreenToClient(hwnd, &cursor);
+    for (const auto* label : labels)
+    {
+        SIZE size{};
+        GetTextExtentPoint32W(hdc, label, static_cast<int>(wcslen(label)), &size);
+        RECT rect{ x, Scale(3), x + size.cx + Scale(24), client.bottom - Scale(3) };
+        g_menuBarItems.push_back(rect);
+        if (PtInRect(&rect, cursor))
+        {
+            HBRUSH hover = CreateSolidBrush(ThemeManager::MenuBarHoverColor());
+            FillRect(hdc, &rect, hover);
+            DeleteObject(hover);
+        }
+        RECT textRect = rect;
+        textRect.left += Scale(12);
+        textRect.right -= Scale(12);
+        DrawTextW(hdc, label, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        x = rect.right + Scale(2);
+    }
+    SelectObject(hdc, oldFont);
+    EndPaint(hwnd, &paint);
+}
+
+LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_PAINT:
+        PaintMenuBar(hwnd);
+        return 0;
+
+    case WM_MOUSEMOVE:
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+
+    case WM_MOUSELEAVE:
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+
+    case WM_LBUTTONUP:
+    {
+        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ShowMenuBarPopup(HitTestMenuBarItem(point));
+        return 0;
+    }
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void EnsureMenuBarClass()
+{
+    static bool registered = false;
+    if (registered)
+    {
+        return;
+    }
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = MenuBarProc;
+    wc.hInstance = g_hInst;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = nullptr;
+    wc.lpszClassName = kMenuBarClass;
+    RegisterClassExW(&wc);
+    registered = true;
+}
+
+void CreateMenuBar(HWND parent)
+{
+    EnsureMenuBarClass();
+    g_menuBar = CreateWindowExW(
+        0,
+        kMenuBarClass,
+        L"",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        0,
+        MenuBarHeight(),
+        parent,
+        nullptr,
+        g_hInst,
+        nullptr);
 }
 
 std::wstring BuildStatusText()
@@ -262,12 +471,12 @@ void CreateMainControls()
     g_gameListLabel = CreateControl(L"STATIC", L"", SS_LEFT, 24, 204, 126, 24, IDC_STATIC);
     g_gameListHelpButton = CreateControl(L"BUTTON", L"?", BS_PUSHBUTTON, 148, 201, 24, 24, IDC_GAME_LIST_HELP);
     g_gameList = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
+        0,
         L"LISTBOX",
         nullptr,
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
         Scale(24),
-        Scale(236),
+        Scale(236) + MenuBarHeight(),
         Scale(430),
         Scale(150),
         g_hWnd,
@@ -283,29 +492,12 @@ void CreateMainControls()
     g_addCurrentButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 236, 118, 32, IDC_ADD_GAME_BUTTON);
     g_addFileButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 278, 118, 32, IDC_ADD_FILE_BUTTON);
     g_deleteGameButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 470, 320, 118, 32, IDC_DELETE_GAME_BUTTON);
-    g_configText = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"EDIT",
-        L"",
-        WS_CHILD | WS_VISIBLE | ES_READONLY | ES_AUTOHSCROLL,
-        Scale(24),
-        Scale(410),
-        Scale(560),
-        Scale(28),
-        g_hWnd,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONFIG_TEXT)),
-        g_hInst,
-        nullptr);
-    if (g_configText)
-    {
-        SetDefaultFont(g_configText);
-        SendMessageW(g_configText, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(Scale(8), Scale(8)));
-    }
     UpdateMainWindow();
 }
 
 void ResizeMainControls(int width, int height)
 {
+    const int topOffset = MenuBarHeight();
     const int margin = Scale(24);
     const int gap = Scale(16);
     const int rightButtonWidth = Scale(118);
@@ -313,74 +505,73 @@ void ResizeMainControls(int width, int height)
     const int listX = margin;
     const int listY = Scale(236);
     const int listWidth = std::max(Scale(260), rightButtonX - gap - listX);
-    const int listHeight = std::max(Scale(132), height - Scale(352));
+    const int listHeight = std::max(Scale(132), height - topOffset - Scale(260));
     const int labelY = Scale(204);
     const int buttonHeight = Scale(32);
-    const int configY = listY + listHeight + Scale(20);
 
     if (g_titleText)
     {
-        MoveWindow(g_titleText, margin, Scale(20), Scale(180), Scale(28), TRUE);
+        MoveWindow(g_titleText, margin, topOffset + Scale(20), Scale(180), Scale(28), TRUE);
     }
     if (g_statusText)
     {
-        MoveWindow(g_statusText, margin, Scale(56), std::max(Scale(260), width - margin * 2), Scale(24), TRUE);
+        MoveWindow(g_statusText, margin, topOffset + Scale(56), std::max(Scale(260), width - margin * 2), Scale(24), TRUE);
     }
     if (g_protectionButton)
     {
-        MoveWindow(g_protectionButton, margin, Scale(96), Scale(148), Scale(36), TRUE);
+        MoveWindow(g_protectionButton, margin, topOffset + Scale(96), Scale(148), Scale(36), TRUE);
     }
     if (g_autoDetectButton)
     {
-        MoveWindow(g_autoDetectButton, margin + Scale(160), Scale(96), Scale(148), Scale(36), TRUE);
+        MoveWindow(g_autoDetectButton, margin + Scale(160), topOffset + Scale(96), Scale(148), Scale(36), TRUE);
     }
     if (g_startupButton)
     {
-        MoveWindow(g_startupButton, margin + Scale(320), Scale(96), Scale(148), Scale(36), TRUE);
+        MoveWindow(g_startupButton, margin + Scale(320), topOffset + Scale(96), Scale(148), Scale(36), TRUE);
     }
     if (g_windowsKeyButton)
     {
-        MoveWindow(g_windowsKeyButton, margin + Scale(480), Scale(96), Scale(120), Scale(36), TRUE);
+        MoveWindow(g_windowsKeyButton, margin + Scale(480), topOffset + Scale(96), Scale(120), Scale(36), TRUE);
     }
     if (g_switchEnglishButton)
     {
-        MoveWindow(g_switchEnglishButton, margin, Scale(144), Scale(148), Scale(34), TRUE);
+        MoveWindow(g_switchEnglishButton, margin, topOffset + Scale(144), Scale(148), Scale(34), TRUE);
     }
     if (g_switchChineseButton)
     {
-        MoveWindow(g_switchChineseButton, margin + Scale(160), Scale(144), Scale(148), Scale(34), TRUE);
+        MoveWindow(g_switchChineseButton, margin + Scale(160), topOffset + Scale(144), Scale(148), Scale(34), TRUE);
     }
     if (g_gameListLabel)
     {
-        MoveWindow(g_gameListLabel, listX, labelY, Scale(122), Scale(24), TRUE);
+        MoveWindow(g_gameListLabel, listX, topOffset + labelY, Scale(122), Scale(24), TRUE);
     }
     if (g_gameList)
     {
-        MoveWindow(g_gameList, listX, listY, listWidth, listHeight, TRUE);
+        MoveWindow(g_gameList, listX, topOffset + listY, listWidth, listHeight, TRUE);
     }
     if (g_gameListHelpButton)
     {
-        MoveWindow(g_gameListHelpButton, listX + Scale(124), labelY - Scale(3), Scale(24), Scale(24), TRUE);
+        MoveWindow(g_gameListHelpButton, listX + Scale(124), topOffset + labelY - Scale(3), Scale(24), Scale(24), TRUE);
     }
     if (g_browseProtectedButton)
     {
-        MoveWindow(g_browseProtectedButton, rightButtonX, labelY - Scale(6), rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_browseProtectedButton, rightButtonX, topOffset + labelY - Scale(6), rightButtonWidth, buttonHeight, TRUE);
     }
     if (g_addCurrentButton)
     {
-        MoveWindow(g_addCurrentButton, rightButtonX, listY, rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_addCurrentButton, rightButtonX, topOffset + listY, rightButtonWidth, buttonHeight, TRUE);
     }
     if (g_addFileButton)
     {
-        MoveWindow(g_addFileButton, rightButtonX, listY + Scale(42), rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_addFileButton, rightButtonX, topOffset + listY + Scale(42), rightButtonWidth, buttonHeight, TRUE);
     }
     if (g_deleteGameButton)
     {
-        MoveWindow(g_deleteGameButton, rightButtonX, listY + Scale(84), rightButtonWidth, buttonHeight, TRUE);
+        MoveWindow(g_deleteGameButton, rightButtonX, topOffset + listY + Scale(84), rightButtonWidth, buttonHeight, TRUE);
     }
-    if (g_configText)
+    if (g_menuBar)
     {
-        MoveWindow(g_configText, margin, configY, std::max(Scale(260), width - margin * 2), Scale(28), TRUE);
+        MoveWindow(g_menuBar, 0, 0, width, topOffset, TRUE);
     }
 
     InvalidateRect(g_hWnd, nullptr, TRUE);
@@ -391,23 +582,13 @@ void ApplyTheme()
     ThemeManager::Initialize(GetDpiForWindow(g_hWnd));
     ThemeManager::ApplyTheme(g_hWnd);
     ApplyFonts();
-    if (g_configText)
-    {
-        SendMessageW(g_configText, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(Scale(8), Scale(8)));
-    }
     if (g_protectedBrowserWindow)
     {
         ThemeManager::ApplyTheme(g_protectedBrowserWindow);
     }
     if (g_hWnd)
     {
-        HMENU oldMenu = GetMenu(g_hWnd);
-        SetMenu(g_hWnd, CreateAppMenu());
-        if (oldMenu)
-        {
-            DestroyMenu(oldMenu);
-        }
-        DrawMenuBar(g_hWnd);
+        InvalidateRect(g_menuBar, nullptr, TRUE);
     }
     if (g_gameList)
     {
@@ -695,23 +876,6 @@ void ShowProtectedListHelp()
         MB_OK | MB_ICONINFORMATION);
 }
 
-void AppendMenuItem(HMENU menu, UINT id, const std::wstring& text, bool checked = false, bool enabled = true)
-{
-    MENUITEMINFOW item{};
-    item.cbSize = sizeof(item);
-    item.fMask = MIIM_ID | MIIM_DATA | MIIM_FTYPE | MIIM_STATE;
-    item.fType = MFT_OWNERDRAW;
-    item.wID = id;
-    item.dwItemData = reinterpret_cast<ULONG_PTR>(StoreMenuText(text));
-    item.fState = (checked ? MFS_CHECKED : MFS_UNCHECKED) | (enabled ? MFS_ENABLED : MFS_DISABLED);
-    InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &item);
-}
-
-void AppendMenuSeparator(HMENU menu)
-{
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-}
-
 void ShowGameListContextMenu(LPARAM lParam)
 {
     if (!g_gameList)
@@ -755,17 +919,7 @@ void ShowGameListContextMenu(LPARAM lParam)
         return;
     }
 
-    HMENU menu = CreatePopupMenu();
-    if (!menu)
-    {
-        return;
-    }
-    ApplyMenuTheme(menu);
-
-    AppendMenuItem(menu, IDM_COPY_GAME_NAME, Text(L"复制名称", L"Copy name"));
-    AppendMenuItem(menu, IDM_OPEN_GAME_FOLDER, Text(L"跳转到该程序文件夹", L"Open program folder"));
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN, point.x, point.y, 0, g_hWnd, nullptr);
-    DestroyMenu(menu);
+    RoundedMenu::ShowAndDispatch(g_hWnd, point, BuildGameListContextMenu());
 }
 
 void DrawGameListItem(const DRAWITEMSTRUCT* item)
@@ -786,13 +940,13 @@ void PaintMainWindow(HWND hWnd)
     GetClientRect(hWnd, &client);
     FillRect(hdc, &client, ThemeManager::WindowBrush());
 
-    auto drawCard = [&](RECT rect)
+    auto drawPanel = [&](RECT rect)
     {
         HBRUSH brush = CreateSolidBrush(ThemeManager::SurfaceColor());
         HPEN pen = CreatePen(PS_SOLID, 1, ThemeManager::BorderColor());
         HGDIOBJ oldBrush = SelectObject(hdc, brush);
         HGDIOBJ oldPen = SelectObject(hdc, pen);
-        RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, Scale(10), Scale(10));
+        Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom);
         SelectObject(hdc, oldBrush);
         SelectObject(hdc, oldPen);
         DeleteObject(brush);
@@ -800,9 +954,11 @@ void PaintMainWindow(HWND hWnd)
     };
 
     RECT controlsCard{ Scale(16), Scale(88), client.right - Scale(16), Scale(188) };
-    RECT listCard{ Scale(16), Scale(192), client.right - Scale(16), client.bottom - Scale(72) };
-    drawCard(controlsCard);
-    drawCard(listCard);
+    RECT listCard{ Scale(16), Scale(192), client.right - Scale(16), client.bottom - Scale(16) };
+    OffsetRect(&controlsCard, 0, MenuBarHeight());
+    OffsetRect(&listCard, 0, MenuBarHeight());
+    drawPanel(controlsCard);
+    drawPanel(listCard);
     EndPaint(hWnd, &paint);
 }
 
@@ -820,7 +976,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         g_hWnd = hWnd;
         ThemeManager::Initialize(GetDpiForWindow(hWnd));
         ThemeManager::ApplyDarkTitleBar(hWnd);
-        SetMenu(hWnd, CreateAppMenu());
+        CreateMenuBar(hWnd);
         AddTrayIcon();
         CreateMainControls();
         ThemeManager::ApplyTheme(hWnd);
@@ -904,7 +1060,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         if (measureItem && measureItem->CtlID == IDC_GAME_LIST)
         {
-            measureItem->itemHeight = Scale(36);
+            measureItem->itemHeight = Scale(28);
             return TRUE;
         }
         break;
@@ -957,6 +1113,63 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         switch (LOWORD(wParam))
         {
+        case IDM_OPEN_CONFIG_DIR:
+            OpenConfigDirectory();
+            return 0;
+
+        case IDM_OPEN_LOG_DIR:
+            OpenLogDirectory();
+            return 0;
+
+        case IDM_RESET_CONFIG:
+            if (MessageBoxW(hWnd,
+                Text(L"确定要重置 FFKeyLock 配置吗？", L"Reset FFKeyLock configuration?"),
+                Text(L"重置配置", L"Reset config"),
+                MB_YESNO | MB_ICONWARNING) == IDYES)
+            {
+                g_protectionEnabled = true;
+                g_autoDetectEnabled = true;
+                g_windowsKeyGuardEnabled = false;
+                g_notificationsEnabled = true;
+                g_overlayNotificationsEnabled = true;
+                g_gameExeNames.clear();
+                g_gameExePaths.clear();
+                LeaveGameProtection();
+                SaveConfig();
+                UpdateMainWindow();
+            }
+            return 0;
+
+        case IDM_TEST_NOTIFICATION:
+            ShowTrayNotification(L"FFKeyLock", Text(L"这是一条测试通知。", L"This is a test notification."), true);
+            return 0;
+
+        case IDM_MUTE_NOTIFICATIONS:
+            g_notificationsEnabled = false;
+            g_overlayNotificationsEnabled = false;
+            SaveConfig();
+            UpdateMainWindow();
+            return 0;
+
+        case IDM_HELP_USAGE:
+            MessageBoxW(hWnd,
+                Text(L"启用保护模式和自动检测后，当前前台窗口属于受保护程序列表时，FFKeyLock 会切换并锁定英文输入法。", L"When protection and auto detect are enabled, FFKeyLock switches protected foreground programs to English input."),
+                Text(L"使用说明", L"Usage"),
+                MB_OK | MB_ICONINFORMATION);
+            return 0;
+
+        case IDM_CHECK_UPDATES:
+            ShowTrayNotification(L"FFKeyLock", Text(L"当前版本暂无在线更新检查。", L"Online update checks are not available in this build."));
+            return 0;
+
+        case IDM_GITHUB_PROJECT:
+            ShellExecuteW(hWnd, L"open", L"https://github.com/", nullptr, nullptr, SW_SHOWNORMAL);
+            return 0;
+
+        case IDM_SHOW_SETTINGS:
+            ShowMainWindow();
+            return 0;
+
         case IDM_SHOW_WINDOW:
             ShowMainWindow();
             return 0;
@@ -1131,13 +1344,7 @@ void UpdateMainWindow()
     if (g_hWnd)
     {
         SetWindowTextW(g_hWnd, kAppName);
-        HMENU oldMenu = GetMenu(g_hWnd);
-        SetMenu(g_hWnd, CreateAppMenu());
-        if (oldMenu)
-        {
-            DestroyMenu(oldMenu);
-        }
-        DrawMenuBar(g_hWnd);
+        InvalidateRect(g_menuBar, nullptr, TRUE);
     }
     if (g_statusText)
     {
@@ -1191,10 +1398,6 @@ void UpdateMainWindow()
     {
         SetWindowTextW(g_browseProtectedButton, Text(L"浏览列表", L"Browse list"));
     }
-    if (g_configText)
-    {
-        SetWindowTextW(g_configText, (std::wstring(Text(L"配置文件：", L"Config file: ")) + g_configPath).c_str());
-    }
     RefreshGameList();
 }
 
@@ -1233,42 +1436,10 @@ void ShowTrayMenu()
     g_menuTargetWindow = GetForegroundWindow();
     RememberExternalForegroundWindow(g_menuTargetWindow);
 
-    HMENU menu = CreatePopupMenu();
-    if (!menu)
-    {
-        return;
-    }
-
-    AppendMenuItem(menu, IDM_SHOW_WINDOW, Text(L"显示主窗口", L"Show main window"));
-    AppendMenuSeparator(menu);
-
-    AppendMenuItem(menu, 0, g_inGameProtection ? Text(L"当前状态：游戏保护中", L"Status: Protecting game") : Text(L"当前状态：普通", L"Status: Normal"), false, false);
-    AppendMenuItem(menu, IDM_PROTECTION, g_protectionEnabled ? Text(L"保护模式：开启", L"Protection: On") : Text(L"保护模式：关闭", L"Protection: Off"), g_protectionEnabled);
-    AppendMenuItem(menu, IDM_AUTO_DETECT, g_autoDetectEnabled ? Text(L"自动检测：开启", L"Auto detect: On") : Text(L"自动检测：关闭", L"Auto detect: Off"), g_autoDetectEnabled);
-    AppendMenuItem(menu, IDM_WINDOWS_KEY_GUARD, g_windowsKeyGuardEnabled ? Text(L"Win 键：禁用", L"Windows key: Disabled") : Text(L"Win 键：开启", L"Windows key: Enabled"), g_windowsKeyGuardEnabled);
-    AppendMenuSeparator(menu);
-
-    AppendMenuItem(menu, IDM_SWITCH_ENGLISH, Text(L"切换输入法到英文", L"Switch input to English"));
-    AppendMenuItem(menu, IDM_SWITCH_CHINESE, Text(L"切换输入法到中文", L"Switch input to Chinese"));
-    AppendMenuSeparator(menu);
-
-    AppendMenuItem(menu, IDM_ADD_CURRENT_GAME, Text(L"添加受保护程序", L"Add protected program"));
-    AppendMenuItem(menu, IDM_ADD_GAME_FILE, Text(L"浏览添加受保护程序...", L"Browse to add protected program..."));
-    AppendMenuSeparator(menu);
-
-    const bool startupEnabled = IsStartupEnabled();
-    AppendMenuItem(menu, IDM_STARTUP, startupEnabled ? Text(L"开机启动：开启", L"Startup: On") : Text(L"开机启动：关闭", L"Startup: Off"), startupEnabled);
-    AppendMenuItem(menu, IDM_NOTIFICATIONS, g_notificationsEnabled ? Text(L"系统通知：开启", L"System notifications: On") : Text(L"系统通知：关闭", L"System notifications: Off"), g_notificationsEnabled);
-    AppendMenuItem(menu, IDM_OVERLAY_NOTIFICATIONS, g_overlayNotificationsEnabled ? Text(L"Overlay 通知：开启", L"Overlay notifications: On") : Text(L"Overlay 通知：关闭", L"Overlay notifications: Off"), g_overlayNotificationsEnabled);
-    AppendMenuSeparator(menu);
-
-    AppendMenuItem(menu, IDM_EXIT, Text(L"退出", L"Exit"));
-
-    POINT point{};
-    GetCursorPos(&point);
+    POINT roundedPoint{};
+    GetCursorPos(&roundedPoint);
     SetForegroundWindow(g_hWnd);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN, point.x, point.y, 0, g_hWnd, nullptr);
-    DestroyMenu(menu);
+    RoundedMenu::ShowAndDispatch(g_hWnd, roundedPoint, BuildTrayMenu(), true);
 }
 
 ATOM RegisterMainWindowClass(HINSTANCE hInstance)

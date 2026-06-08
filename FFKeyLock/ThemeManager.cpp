@@ -36,6 +36,14 @@ COLORREF g_disabledTextColor = RGB(122, 122, 122);
 COLORREF g_borderColor = RGB(82, 82, 82);
 COLORREF g_accentColor = RGB(86, 156, 214);
 COLORREF g_selectedColor = RGB(52, 80, 112);
+COLORREF g_menuBarColor = RGB(45, 45, 48);
+COLORREF g_menuBarHoverColor = RGB(55, 55, 58);
+COLORREF g_menuBackgroundColor = RGB(45, 45, 48);
+COLORREF g_menuHoverColor = RGB(55, 55, 58);
+COLORREF g_menuPressedColor = RGB(63, 63, 70);
+COLORREF g_menuBorderColor = RGB(69, 69, 69);
+COLORREF g_menuSeparatorColor = RGB(58, 58, 58);
+COLORREF g_menuIconColor = RGB(218, 218, 218);
 bool g_dark = true;
 
 bool SystemUsesDarkTheme()
@@ -121,21 +129,37 @@ void RebuildResources()
         g_borderColor = RGB(82, 82, 82);
         g_accentColor = RGB(86, 156, 214);
         g_selectedColor = RGB(52, 80, 112);
+        g_menuBarColor = RGB(45, 45, 48);
+        g_menuBarHoverColor = RGB(55, 55, 58);
+        g_menuBackgroundColor = RGB(45, 45, 48);
+        g_menuHoverColor = RGB(55, 55, 58);
+        g_menuPressedColor = RGB(63, 63, 70);
+        g_menuBorderColor = RGB(69, 69, 69);
+        g_menuSeparatorColor = RGB(58, 58, 58);
+        g_menuIconColor = RGB(218, 218, 218);
     }
     else
     {
-        g_windowColor = RGB(248, 250, 252);
+        g_windowColor = RGB(245, 245, 245);
         g_surfaceColor = RGB(255, 255, 255);
         g_cardColor = RGB(255, 255, 255);
-        g_buttonColor = RGB(245, 247, 250);
-        g_buttonHotColor = RGB(235, 241, 249);
-        g_buttonPressedColor = RGB(222, 233, 246);
-        g_textColor = RGB(30, 41, 59);
-        g_mutedTextColor = RGB(71, 85, 105);
-        g_disabledTextColor = RGB(148, 163, 184);
-        g_borderColor = RGB(203, 213, 225);
-        g_accentColor = RGB(37, 99, 235);
-        g_selectedColor = RGB(219, 234, 254);
+        g_buttonColor = RGB(248, 248, 248);
+        g_buttonHotColor = RGB(229, 241, 251);
+        g_buttonPressedColor = RGB(204, 228, 247);
+        g_textColor = RGB(30, 30, 30);
+        g_mutedTextColor = RGB(93, 93, 93);
+        g_disabledTextColor = RGB(150, 150, 150);
+        g_borderColor = RGB(204, 204, 204);
+        g_accentColor = RGB(0, 122, 204);
+        g_selectedColor = RGB(204, 228, 247);
+        g_menuBarColor = RGB(243, 243, 243);
+        g_menuBarHoverColor = RGB(229, 241, 251);
+        g_menuBackgroundColor = RGB(255, 255, 255);
+        g_menuHoverColor = RGB(229, 241, 251);
+        g_menuPressedColor = RGB(204, 228, 247);
+        g_menuBorderColor = RGB(204, 204, 204);
+        g_menuSeparatorColor = RGB(229, 229, 229);
+        g_menuIconColor = RGB(80, 80, 80);
     }
 
     g_uiFont = CreateThemeFont(9, FW_NORMAL);
@@ -408,33 +432,28 @@ void ThemeManager::DrawListBoxItem(const DRAWITEMSTRUCT& item, const std::vector
     }
 
     const bool selected = (item.itemState & ODS_SELECTED) != 0;
-    HBRUSH brush = CreateSolidBrush(selected ? g_selectedColor : g_surfaceColor);
+    const COLORREF fill = selected ? g_selectedColor : g_surfaceColor;
+    const COLORREF text = selected ? (g_dark ? RGB(255, 255, 255) : g_textColor) : g_textColor;
+    HBRUSH brush = CreateSolidBrush(fill);
     FillRect(item.hDC, &item.rcItem, brush);
     DeleteObject(brush);
 
     if (item.itemID < items.size())
     {
         RECT textRect = item.rcItem;
-        textRect.left += Scale(12);
-        textRect.right -= Scale(12);
+        textRect.left += Scale(8);
+        textRect.right -= Scale(8);
         SetBkMode(item.hDC, TRANSPARENT);
-        SetTextColor(item.hDC, g_textColor);
+        SetTextColor(item.hDC, text);
         HGDIOBJ oldFont = SelectObject(item.hDC, g_uiFont ? g_uiFont : GetStockObject(DEFAULT_GUI_FONT));
         DrawTextW(item.hDC, items[item.itemID].c_str(), -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         SelectObject(item.hDC, oldFont);
     }
 
-    HPEN pen = CreatePen(PS_SOLID, 1, g_borderColor);
-    HGDIOBJ oldPen = SelectObject(item.hDC, pen);
-    MoveToEx(item.hDC, item.rcItem.left + Scale(10), item.rcItem.bottom - 1, nullptr);
-    LineTo(item.hDC, item.rcItem.right - Scale(10), item.rcItem.bottom - 1);
-    SelectObject(item.hDC, oldPen);
-    DeleteObject(pen);
-
     if (item.itemState & ODS_FOCUS)
     {
         RECT focusRect = item.rcItem;
-        InflateRect(&focusRect, -2, -2);
+        InflateRect(&focusRect, -1, -1);
         DrawFocusRect(item.hDC, &focusRect);
     }
 }
@@ -479,9 +498,74 @@ COLORREF ThemeManager::MutedTextColor()
     return g_mutedTextColor;
 }
 
+COLORREF ThemeManager::DisabledTextColor()
+{
+    return g_disabledTextColor;
+}
+
 COLORREF ThemeManager::BorderColor()
 {
     return g_borderColor;
+}
+
+COLORREF ThemeManager::AccentColor()
+{
+    return g_accentColor;
+}
+
+COLORREF ThemeManager::ButtonColor()
+{
+    return g_buttonColor;
+}
+
+COLORREF ThemeManager::ButtonHotColor()
+{
+    return g_buttonHotColor;
+}
+
+COLORREF ThemeManager::ButtonPressedColor()
+{
+    return g_buttonPressedColor;
+}
+
+COLORREF ThemeManager::MenuBarColor()
+{
+    return g_menuBarColor;
+}
+
+COLORREF ThemeManager::MenuBarHoverColor()
+{
+    return g_menuBarHoverColor;
+}
+
+COLORREF ThemeManager::MenuBackgroundColor()
+{
+    return g_menuBackgroundColor;
+}
+
+COLORREF ThemeManager::MenuHoverColor()
+{
+    return g_menuHoverColor;
+}
+
+COLORREF ThemeManager::MenuPressedColor()
+{
+    return g_menuPressedColor;
+}
+
+COLORREF ThemeManager::MenuBorderColor()
+{
+    return g_menuBorderColor;
+}
+
+COLORREF ThemeManager::MenuSeparatorColor()
+{
+    return g_menuSeparatorColor;
+}
+
+COLORREF ThemeManager::MenuIconColor()
+{
+    return g_menuIconColor;
 }
 
 bool ThemeManager::IsDark()
