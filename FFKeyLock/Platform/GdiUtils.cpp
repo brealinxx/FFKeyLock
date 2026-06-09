@@ -42,17 +42,6 @@ BufferedPaint::BufferedPaint(HDC target, const RECT& rect, const RECT& flushRect
 
 BufferedPaint::~BufferedPaint()
 {
-    if (target_ && memory_ && bitmap_)
-    {
-        SetViewportOrgEx(memory_, 0, 0, nullptr);
-        const int flushWidth = flushRect_.right - flushRect_.left;
-        const int flushHeight = flushRect_.bottom - flushRect_.top;
-        if (flushWidth > 0 && flushHeight > 0)
-        {
-            BitBlt(target_, flushRect_.left, flushRect_.top, flushWidth, flushHeight,
-                memory_, flushRect_.left - rect_.left, flushRect_.top - rect_.top, SRCCOPY);
-        }
-    }
     if (memory_ && oldBitmap_)
     {
         SelectObject(memory_, oldBitmap_);
@@ -75,6 +64,28 @@ HDC BufferedPaint::Dc() const
 bool BufferedPaint::IsValid() const
 {
     return memory_ && bitmap_;
+}
+
+void BufferedPaint::Present()
+{
+    if (presented_)
+    {
+        return;
+    }
+    presented_ = true;
+    if (!target_ || !memory_ || !bitmap_)
+    {
+        return;
+    }
+
+    SetViewportOrgEx(memory_, 0, 0, nullptr);
+    const int flushWidth = flushRect_.right - flushRect_.left;
+    const int flushHeight = flushRect_.bottom - flushRect_.top;
+    if (flushWidth > 0 && flushHeight > 0)
+    {
+        BitBlt(target_, flushRect_.left, flushRect_.top, flushWidth, flushHeight,
+            memory_, flushRect_.left - rect_.left, flushRect_.top - rect_.top, SRCCOPY);
+    }
 }
 
 SelectObjectScope::SelectObjectScope(HDC hdc, HGDIOBJ object)

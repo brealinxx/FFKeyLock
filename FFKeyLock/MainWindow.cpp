@@ -376,6 +376,7 @@ void PaintMenuBar(HWND hwnd)
         x = rect.right + Scale(2);
     }
     SelectObject(drawDc, oldFont);
+    buffer.Present();
     EndPaint(hwnd, &paint);
 }
 
@@ -388,7 +389,12 @@ LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_ERASEBKGND:
+    {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        FillRect(reinterpret_cast<HDC>(wParam), &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
         return TRUE;
+    }
 
     case WM_MOUSEMOVE:
         InvalidateWindow(hwnd);
@@ -749,6 +755,21 @@ void DrawProgramList(HDC hdc, int scrollY)
 void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
 {
     UNREFERENCED_PARAMETER(panel);
+
+    wchar_t debugMessage[256]{};
+    StringCchPrintfW(
+        debugMessage,
+        std::size(debugMessage),
+        L"PaintContentPanel contentHeight=%d buttons=%zu statusCard={%ld,%ld,%ld,%ld}\n",
+        g_contentLayout.contentHeight,
+        g_contentButtons.size(),
+        g_contentLayout.statusCard.left,
+        g_contentLayout.statusCard.top,
+        g_contentLayout.statusCard.right,
+        g_contentLayout.statusCard.bottom);
+    OutputDebugStringW(L"PaintContentPanel\n");
+    OutputDebugStringW(debugMessage);
+
     HRGN clipRegion = CreateRectRgn(client.left, client.top, client.right, client.bottom);
     SelectClipRgn(hdc, clipRegion);
     DeleteObject(clipRegion);
@@ -973,6 +994,8 @@ void ResizeMainControls(int width, int height)
     if (g_contentPanel)
     {
         SetWindowPos(g_contentPanel, nullptr, 0, menuHeight, width, std::max(0, height - menuHeight), SWP_NOZORDER | SWP_NOACTIVATE);
+        ContentPanel::Relayout(g_contentPanel);
+        InvalidateRect(g_contentPanel, nullptr, TRUE);
     }
 }
 
@@ -1116,6 +1139,7 @@ void PaintWindowBackground(HWND hwnd)
     GetClientRect(hwnd, &client);
     GdiUtils::BufferedPaint buffer(hdc, client);
     FillRect(buffer.Dc(), &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+    buffer.Present();
     EndPaint(hwnd, &paint);
 }
 
@@ -1154,7 +1178,12 @@ LRESULT CALLBACK ProtectedBrowserProc(HWND hwnd, UINT message, WPARAM wParam, LP
     }
 
     case WM_ERASEBKGND:
+    {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        FillRect(reinterpret_cast<HDC>(wParam), &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
         return TRUE;
+    }
 
     case WM_PAINT:
         PaintWindowBackground(hwnd);
@@ -1350,6 +1379,7 @@ void PaintMainWindow(HWND hWnd)
     HDC drawDc = buffer.Dc();
     FillRect(drawDc, &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
 
+    buffer.Present();
     EndPaint(hWnd, &paint);
 }
 
@@ -1417,9 +1447,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DPICHANGED:
     {
         ThemeManager::SetDpi(HIWORD(wParam));
-        g_scrollY = 0;
-        ContentPanel::SetScrollY(g_contentPanel, 0);
+        ThemeManager::ApplyTheme(hWnd);
         ApplyFonts();
+
         const auto* suggestedRect = reinterpret_cast<RECT*>(lParam);
         if (suggestedRect)
         {
@@ -1432,8 +1462,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         RECT client{};
         GetClientRect(hWnd, &client);
         ResizeMainControls(client.right - client.left, client.bottom - client.top);
-        ThemeManager::ApplyTheme(hWnd);
-        InvalidateWindowAndChildren(hWnd);
+
+        g_scrollY = 0;
+        ContentPanel::SetScrollY(g_contentPanel, 0);
+        ContentPanel::Relayout(g_contentPanel);
+        InvalidateRect(g_contentPanel, nullptr, TRUE);
+
+        RedrawWindow(
+            hWnd,
+            nullptr,
+            nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
         return 0;
     }
 
@@ -1763,6 +1802,9 @@ void UpdateMainWindow()
     if (g_hWnd)
     {
         SetWindowTextW(g_hWnd, kAppName);
+    }
+    if (g_menuBar)
+    {
         InvalidateWindow(g_menuBar);
     }
     if (g_statusText)
@@ -1941,6 +1983,7 @@ void UpdateMainWindow()
     if (g_contentPanel)
     {
         ContentPanel::Relayout(g_contentPanel);
+        InvalidateRect(g_contentPanel, nullptr, TRUE);
     }
     InvalidateWindowAndChildren(g_hWnd);
 }

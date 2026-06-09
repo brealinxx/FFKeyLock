@@ -92,6 +92,7 @@ void Paint(HWND hwnd)
     SetTextColor(drawDc, enabled ? ThemeManager::TextColor() : ThemeManager::DisabledTextColor());
     GdiUtils::SelectObjectScope fontScope(drawDc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
     DrawTextW(drawDc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    buffer.Present();
     EndPaint(hwnd, &paint);
 }
 

@@ -388,6 +388,7 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
         FillRect(hdc, &textBackground, background = CreateSolidBrush(g_windowColor));
         DeleteObject(background);
         DrawTextW(hdc, text, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        buffer.Present();
         return;
     }
 
@@ -423,6 +424,7 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
     }
     DrawTextW(hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     SelectObject(hdc, oldFont);
+    buffer.Present();
 }
 
 void ThemeManager::MeasureMenuItem(MEASUREITEMSTRUCT& item)
@@ -517,6 +519,7 @@ void ThemeManager::DrawListBoxItem(const DRAWITEMSTRUCT& item, const std::vector
         InflateRect(&focusRect, -1, -1);
         DrawFocusRect(hdc, &focusRect);
     }
+    buffer.Present();
 }
 
 HFONT ThemeManager::UiFont()

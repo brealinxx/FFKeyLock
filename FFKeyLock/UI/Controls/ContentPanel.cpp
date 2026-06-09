@@ -144,22 +144,17 @@ void ScrollTo(HWND hwnd, int scrollY)
 
 void Paint(HWND hwnd)
 {
+    OutputDebugStringW(L"ContentPanel Paint\n");
+
     PAINTSTRUCT paint{};
     HDC hdc = BeginPaint(hwnd, &paint);
     RECT client{};
     GetClientRect(hwnd, &client);
-    if (IsRectEmpty(&paint.rcPaint))
-    {
-        EndPaint(hwnd, &paint);
-        return;
-    }
 
-    GdiUtils::BufferedPaint buffer(hdc, client, paint.rcPaint);
+    GdiUtils::BufferedPaint buffer(hdc, client);
     HDC drawDc = buffer.Dc();
     FillRect(drawDc, &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
 
-    HRGN paintRegion = CreateRectRgn(paint.rcPaint.left, paint.rcPaint.top, paint.rcPaint.right, paint.rcPaint.bottom);
-    SelectClipRgn(drawDc, paintRegion);
     if (State* state = GetState(hwnd); state && state->paint)
     {
         if (state->contentHeight <= 0 && state->layout)
@@ -169,9 +164,8 @@ void Paint(HWND hwnd)
         }
         state->paint(hwnd, drawDc, client, state->scrollY);
     }
-    SelectClipRgn(drawDc, nullptr);
-    DeleteObject(paintRegion);
 
+    buffer.Present();
     EndPaint(hwnd, &paint);
 }
 

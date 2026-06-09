@@ -18,6 +18,7 @@ public:
 
     HDC Dc() const;
     bool IsValid() const;
+    void Present();
 
 private:
     HDC target_ = nullptr;
@@ -27,6 +28,7 @@ private:
     RECT rect_{};
     RECT flushRect_{};
     SIZE size_{};
+    bool presented_ = false;
 };
 
 class SelectObjectScope

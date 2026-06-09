@@ -23,6 +23,6 @@ class RoundedMenu
 {
 public:
     static UINT Show(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBottom = false);
-    static void ShowAndDispatch(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBottom = false);
+    static void ShowAndDispatch(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBot tom = false);
 };
 }

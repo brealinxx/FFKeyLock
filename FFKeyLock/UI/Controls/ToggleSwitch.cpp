@@ -77,6 +77,7 @@ void Paint(HWND hwnd)
 
     const COLORREF knobColor = enabled ? RGB(255, 255, 255) : ThemeManager::BorderColor();
     GdiUtils::FillRoundRect(drawDc, knob, knobColor, knobColor, knobSize);
+    buffer.Present();
     EndPaint(hwnd, &paint);
 }
 
