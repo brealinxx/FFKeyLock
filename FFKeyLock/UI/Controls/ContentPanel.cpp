@@ -18,9 +18,15 @@ constexpr wchar_t kStateProp[] = L"FFKeyLock.ContentPanelState";
 struct State
 {
     LayoutCallback layout = nullptr;
-    StaticCtlColorCallback ctlColorStatic = nullptr;
+    PaintCallback paint = nullptr;
+    ButtonHitTestCallback hitTestButton = nullptr;
+    ButtonStateCallback setButtonState = nullptr;
+    MouseClickCallback click = nullptr;
+    MouseWheelCallback wheel = nullptr;
     int scrollY = 0;
     int contentHeight = 0;
+    int hotButtonId = 0;
+    int pressedButtonId = 0;
 };
 
 State* GetState(HWND hwnd)
@@ -44,9 +50,14 @@ void UpdateScrollBar(HWND hwnd, State& state, int viewportHeight)
     ShowScrollBar(hwnd, SB_VERT, maxScroll > 0);
 }
 
+void InvalidatePanel(HWND hwnd)
+{
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
 void RedrawPanel(HWND hwnd)
 {
-    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
 }
 
 void Layout(HWND hwnd)
@@ -62,10 +73,50 @@ void Layout(HWND hwnd)
     const int width = client.right - client.left;
     const int height = client.bottom - client.top;
 
+    const int oldScrollY = state->scrollY;
     state->contentHeight = state->layout(hwnd, width, height, state->scrollY);
     UpdateScrollBar(hwnd, *state, height);
-    state->contentHeight = state->layout(hwnd, width, height, state->scrollY);
-    UpdateScrollBar(hwnd, *state, height);
+    if (state->scrollY != oldScrollY)
+    {
+        state->contentHeight = state->layout(hwnd, width, height, state->scrollY);
+        UpdateScrollBar(hwnd, *state, height);
+    }
+}
+
+void SetHotButton(HWND hwnd, State& state, int id)
+{
+    if (id == state.hotButtonId)
+    {
+        return;
+    }
+    if (state.setButtonState && state.hotButtonId)
+    {
+        state.setButtonState(hwnd, state.hotButtonId, false, state.pressedButtonId == state.hotButtonId);
+    }
+    state.hotButtonId = id;
+    if (state.setButtonState && state.hotButtonId)
+    {
+        state.setButtonState(hwnd, state.hotButtonId, true, state.pressedButtonId == state.hotButtonId);
+    }
+    InvalidatePanel(hwnd);
+}
+
+void SetPressedButton(HWND hwnd, State& state, int id)
+{
+    if (id == state.pressedButtonId)
+    {
+        return;
+    }
+    if (state.setButtonState && state.pressedButtonId)
+    {
+        state.setButtonState(hwnd, state.pressedButtonId, state.hotButtonId == state.pressedButtonId, false);
+    }
+    state.pressedButtonId = id;
+    if (state.setButtonState && state.pressedButtonId)
+    {
+        state.setButtonState(hwnd, state.pressedButtonId, state.hotButtonId == state.pressedButtonId, true);
+    }
+    InvalidatePanel(hwnd);
 }
 
 void ScrollTo(HWND hwnd, int scrollY)
@@ -87,8 +138,8 @@ void ScrollTo(HWND hwnd, int scrollY)
     }
 
     state->scrollY = nextScrollY;
-    Layout(hwnd);
-    RedrawPanel(hwnd);
+    UpdateScrollBar(hwnd, *state, height);
+    InvalidatePanel(hwnd);
 }
 
 void Paint(HWND hwnd)
@@ -97,10 +148,29 @@ void Paint(HWND hwnd)
     HDC hdc = BeginPaint(hwnd, &paint);
     RECT client{};
     GetClientRect(hwnd, &client);
+    if (IsRectEmpty(&paint.rcPaint))
+    {
+        EndPaint(hwnd, &paint);
+        return;
+    }
 
-    GdiUtils::BufferedPaint buffer(hdc, client);
+    GdiUtils::BufferedPaint buffer(hdc, client, paint.rcPaint);
     HDC drawDc = buffer.Dc();
     FillRect(drawDc, &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+
+    HRGN paintRegion = CreateRectRgn(paint.rcPaint.left, paint.rcPaint.top, paint.rcPaint.right, paint.rcPaint.bottom);
+    SelectClipRgn(drawDc, paintRegion);
+    if (State* state = GetState(hwnd); state && state->paint)
+    {
+        if (state->contentHeight <= 0 && state->layout)
+        {
+            state->contentHeight = state->layout(hwnd, client.right - client.left, client.bottom - client.top, state->scrollY);
+            UpdateScrollBar(hwnd, *state, client.bottom - client.top);
+        }
+        state->paint(hwnd, drawDc, client, state->scrollY);
+    }
+    SelectClipRgn(drawDc, nullptr);
+    DeleteObject(paintRegion);
 
     EndPaint(hwnd, &paint);
 }
@@ -177,31 +247,103 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEWHEEL:
     {
         State* state = GetState(hwnd);
+        if (state && state->wheel)
+        {
+            POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hwnd, &point);
+            if (state->wheel(hwnd, point, state->scrollY, GET_WHEEL_DELTA_WPARAM(wParam)))
+            {
+                InvalidatePanel(hwnd);
+                return 0;
+            }
+        }
         const int current = state ? state->scrollY : 0;
         ScrollTo(hwnd, current - GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA * ThemeManager::Scale(72));
         return 0;
     }
 
+    case WM_MOUSEMOVE:
+    {
+        State* state = GetState(hwnd);
+        if (!state || !state->hitTestButton)
+        {
+            return 0;
+        }
+        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        const int hotId = state->hitTestButton(hwnd, point, state->scrollY);
+        SetHotButton(hwnd, *state, hotId);
+        TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, hwnd, 0 };
+        TrackMouseEvent(&track);
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+    {
+        State* state = GetState(hwnd);
+        if (state)
+        {
+            SetHotButton(hwnd, *state, 0);
+            SetPressedButton(hwnd, *state, 0);
+        }
+        return 0;
+    }
+
+    case WM_LBUTTONDOWN:
+    {
+        State* state = GetState(hwnd);
+        if (!state || !state->hitTestButton)
+        {
+            return 0;
+        }
+        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        const int id = state->hitTestButton(hwnd, point, state->scrollY);
+        if (id)
+        {
+            SetCapture(hwnd);
+            SetPressedButton(hwnd, *state, id);
+        }
+        return 0;
+    }
+
+    case WM_LBUTTONUP:
+    {
+        State* state = GetState(hwnd);
+        if (!state)
+        {
+            return 0;
+        }
+        const int pressedId = state->pressedButtonId;
+        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        const int releasedId = state->hitTestButton ? state->hitTestButton(hwnd, point, state->scrollY) : 0;
+        if (GetCapture() == hwnd)
+        {
+            ReleaseCapture();
+        }
+        SetPressedButton(hwnd, *state, 0);
+        SetHotButton(hwnd, *state, releasedId);
+        if (pressedId && pressedId == releasedId)
+        {
+            SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(pressedId, BN_CLICKED), 0);
+        }
+        else if (!pressedId && state->click)
+        {
+            state->click(hwnd, point, state->scrollY);
+        }
+        return 0;
+    }
+
     case WM_ERASEBKGND:
+    {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        HDC hdc = reinterpret_cast<HDC>(wParam);
+        FillRect(hdc, &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
         return TRUE;
+    }
 
     case WM_PAINT:
         Paint(hwnd);
         return 0;
-
-    case WM_CTLCOLORSTATIC:
-    {
-        State* state = GetState(hwnd);
-        HDC hdc = reinterpret_cast<HDC>(wParam);
-        HWND control = reinterpret_cast<HWND>(lParam);
-        if (state && state->ctlColorStatic)
-        {
-            return reinterpret_cast<LRESULT>(state->ctlColorStatic(hwnd, hdc, control));
-        }
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, ThemeManager::TextColor());
-        return reinterpret_cast<LRESULT>(ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : GetStockObject(WHITE_BRUSH));
-    }
 
     case WM_COMMAND:
     case WM_CONTEXTMENU:
@@ -227,7 +369,7 @@ void Register(HINSTANCE instance)
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.style = 0;
     wc.lpfnWndProc = Proc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -244,7 +386,7 @@ HWND Create(HWND parent, HINSTANCE instance)
         0,
         kClassName,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_VSCROLL,
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPSIBLINGS,
         0,
         0,
         0,
@@ -264,12 +406,48 @@ void SetLayoutCallback(HWND panel, LayoutCallback callback)
     }
 }
 
-void SetStaticCtlColorCallback(HWND panel, StaticCtlColorCallback callback)
+void SetPaintCallback(HWND panel, PaintCallback callback)
 {
     State* state = GetState(panel);
     if (state)
     {
-        state->ctlColorStatic = callback;
+        state->paint = callback;
+    }
+}
+
+void SetButtonHitTestCallback(HWND panel, ButtonHitTestCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->hitTestButton = callback;
+    }
+}
+
+void SetButtonStateCallback(HWND panel, ButtonStateCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->setButtonState = callback;
+    }
+}
+
+void SetMouseClickCallback(HWND panel, MouseClickCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->click = callback;
+    }
+}
+
+void SetMouseWheelCallback(HWND panel, MouseWheelCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->wheel = callback;
     }
 }
 
@@ -280,7 +458,7 @@ void Relayout(HWND panel)
         return;
     }
     Layout(panel);
-    RedrawPanel(panel);
+    InvalidatePanel(panel);
 }
 
 void SetScrollY(HWND panel, int scrollY)
@@ -294,7 +472,7 @@ void SetScrollY(HWND panel, int scrollY)
     {
         state->scrollY = std::max(0, scrollY);
         Layout(panel);
-        RedrawPanel(panel);
+        InvalidatePanel(panel);
     }
 }
 

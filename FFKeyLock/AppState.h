@@ -67,7 +67,6 @@ extern HWND g_addCurrentButton;
 extern HWND g_addFileButton;
 extern HWND g_deleteGameButton;
 extern HWND g_browseProtectedButton;
-extern HWND g_gameList;
 extern HWND g_configText;
 extern UINT g_taskbarCreatedMessage;
 extern bool g_protectionEnabled;

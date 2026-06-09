@@ -32,7 +32,6 @@ HWND g_addCurrentButton = nullptr;
 HWND g_addFileButton = nullptr;
 HWND g_deleteGameButton = nullptr;
 HWND g_browseProtectedButton = nullptr;
-HWND g_gameList = nullptr;
 HWND g_configText = nullptr;
 UINT g_taskbarCreatedMessage = 0;
 bool g_protectionEnabled = true;

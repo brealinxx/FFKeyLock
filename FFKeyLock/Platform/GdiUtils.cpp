@@ -5,10 +5,18 @@ namespace FFKeyLock
 namespace GdiUtils
 {
 BufferedPaint::BufferedPaint(HDC target, const RECT& rect)
-    : target_(target), rect_(rect)
+    : BufferedPaint(target, rect, rect)
+{
+}
+
+BufferedPaint::BufferedPaint(HDC target, const RECT& rect, const RECT& flushRect)
+    : target_(target), rect_(rect), flushRect_(flushRect)
 {
     size_.cx = rect_.right - rect_.left;
     size_.cy = rect_.bottom - rect_.top;
+    RECT clippedFlush{};
+    IntersectRect(&clippedFlush, &flushRect_, &rect_);
+    flushRect_ = clippedFlush;
     if (!target_ || size_.cx <= 0 || size_.cy <= 0)
     {
         return;
@@ -37,7 +45,13 @@ BufferedPaint::~BufferedPaint()
     if (target_ && memory_ && bitmap_)
     {
         SetViewportOrgEx(memory_, 0, 0, nullptr);
-        BitBlt(target_, rect_.left, rect_.top, size_.cx, size_.cy, memory_, 0, 0, SRCCOPY);
+        const int flushWidth = flushRect_.right - flushRect_.left;
+        const int flushHeight = flushRect_.bottom - flushRect_.top;
+        if (flushWidth > 0 && flushHeight > 0)
+        {
+            BitBlt(target_, flushRect_.left, flushRect_.top, flushWidth, flushHeight,
+                memory_, flushRect_.left - rect_.left, flushRect_.top - rect_.top, SRCCOPY);
+        }
     }
     if (memory_ && oldBitmap_)
     {

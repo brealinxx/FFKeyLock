@@ -31,7 +31,6 @@ namespace
 {
 constexpr wchar_t kProtectedBrowserClass[] = L"FFKeyLockProtectedBrowser";
 constexpr wchar_t kMenuBarClass[] = L"FFKeyLockMenuBar";
-constexpr wchar_t kCardPanelClass[] = L"FFKeyLockCardPanel";
 HWND g_protectedBrowserWindow = nullptr;
 HWND g_protectedBrowserList = nullptr;
 HWND g_menuBar = nullptr;
@@ -44,6 +43,39 @@ std::vector<RECT> g_menuBarItems;
 int g_scrollY = 0;
 int g_contentHeight = 0;
 
+struct UiButton
+{
+    int id = 0;
+    RECT rect{};
+    std::wstring text;
+    bool hot = false;
+    bool pressed = false;
+    bool enabled = true;
+};
+
+struct ContentLayout
+{
+    RECT icon{};
+    RECT title{};
+    RECT subtitle{};
+    RECT statusCard{};
+    RECT statusTitle{};
+    RECT primaryStatus{};
+    RECT detectedStatus{};
+    RECT inputStatus{};
+    RECT winKeyStatus{};
+    RECT featureCard{};
+    RECT programsCard{};
+    RECT programLabel{};
+    RECT listRect{};
+    int contentHeight = 0;
+};
+
+ContentLayout g_contentLayout{};
+std::vector<UiButton> g_contentButtons;
+int g_selectedGameIndex = -1;
+int g_gameListTopIndex = 0;
+
 int Scale(int value)
 {
     return ThemeManager::Scale(value);
@@ -54,17 +86,7 @@ int MenuBarHeight()
     return Scale(30);
 }
 
-void RedrawFully(HWND hwnd)
-{
-    if (!hwnd)
-    {
-        return;
-    }
-
-    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-}
-
-void InvalidateFully(HWND hwnd)
+void InvalidateWindow(HWND hwnd)
 {
     if (!hwnd)
     {
@@ -74,38 +96,14 @@ void InvalidateFully(HWND hwnd)
     InvalidateRect(hwnd, nullptr, TRUE);
 }
 
-void InvalidateChildBounds(HWND child)
+void InvalidateWindowAndChildren(HWND hwnd)
 {
-    if (!child || !GetParent(child))
+    if (!hwnd)
     {
         return;
     }
 
-    RECT rect{};
-    if (!GetWindowRect(child, &rect))
-    {
-        return;
-    }
-
-    POINT topLeft{ rect.left, rect.top };
-    POINT bottomRight{ rect.right, rect.bottom };
-    HWND parent = GetParent(child);
-    ScreenToClient(parent, &topLeft);
-    ScreenToClient(parent, &bottomRight);
-    RECT clientRect{ topLeft.x, topLeft.y, bottomRight.x, bottomRight.y };
-    InvalidateRect(parent, &clientRect, TRUE);
-}
-
-void MoveChildWindow(HWND child, int x, int y, int width, int height)
-{
-    if (!child)
-    {
-        return;
-    }
-
-    InvalidateChildBounds(child);
-    SetWindowPos(child, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
-    InvalidateChildBounds(child);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 void SetDefaultFont(HWND control)
@@ -143,7 +141,6 @@ void ApplyFonts()
         g_addFileButton,
         g_deleteGameButton,
         g_browseProtectedButton,
-        g_gameList,
     };
 
     if (g_titleText)
@@ -159,45 +156,10 @@ void ApplyFonts()
     }
 }
 
-HWND CreateControl(const wchar_t* className, const wchar_t* text, DWORD style, int x, int y, int width, int height, int id)
-{
-    HWND parent = g_contentPanel ? g_contentPanel : g_hWnd;
-    HWND control = CreateWindowExW(
-        0,
-        className,
-        text,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style,
-        Scale(x),
-        Scale(y),
-        Scale(width),
-        Scale(height),
-        parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
-        g_hInst,
-        nullptr);
-
-    if (control)
-    {
-        SetDefaultFont(control);
-    }
-    return control;
-}
-
-void MoveCardPanel(HWND panel, int x, int y, int width, int height)
-{
-    if (!panel)
-    {
-        return;
-    }
-
-    InvalidateChildBounds(panel);
-    SetWindowPos(panel, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
-    InvalidateChildBounds(panel);
-}
-
 void RefreshProtectedBrowserList();
 int LayoutContentControls(HWND panel, int width, int height, int scrollY);
-HBRUSH ContentPanelCtlColorStatic(HWND panel, HDC hdc, HWND control);
+void ClampGameListSelection();
+int HitTestGameListItem(POINT point, int scrollY);
 
 RoundedMenuItem MenuItem(UINT id, const std::wstring& text, const std::wstring& shortcut = L"", bool checked = false, bool enabled = true)
 {
@@ -347,7 +309,7 @@ void ShowMenuBarPopup(int index)
     POINT anchor{ g_menuBarItems[index].left, g_menuBarItems[index].bottom };
     ClientToScreen(g_menuBar, &anchor);
     RoundedMenu::ShowAndDispatch(g_hWnd, anchor, items);
-    InvalidateFully(g_menuBar);
+    InvalidateWindow(g_menuBar);
 }
 
 int HitTestMenuBarItem(POINT point)
@@ -429,11 +391,11 @@ LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return TRUE;
 
     case WM_MOUSEMOVE:
-        InvalidateFully(hwnd);
+        InvalidateWindow(hwnd);
         return 0;
 
     case WM_MOUSELEAVE:
-        InvalidateFully(hwnd);
+        InvalidateWindow(hwnd);
         return 0;
 
     case WM_LBUTTONUP:
@@ -480,98 +442,6 @@ void CreateMenuBar(HWND parent)
         MenuBarHeight(),
         parent,
         nullptr,
-        g_hInst,
-        nullptr);
-}
-
-void PaintCardPanel(HWND hwnd)
-{
-    PAINTSTRUCT paint{};
-    HDC hdc = BeginPaint(hwnd, &paint);
-    RECT client{};
-    GetClientRect(hwnd, &client);
-
-    GdiUtils::BufferedPaint buffer(hdc, client);
-    HDC drawDc = buffer.Dc();
-    HBRUSH background = CreateSolidBrush(ThemeManager::WindowColor());
-    FillRect(drawDc, &client, background);
-    DeleteObject(background);
-
-    GdiUtils::FillRoundRect(drawDc, client, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(8));
-
-    wchar_t title[128]{};
-    GetWindowTextW(hwnd, title, static_cast<int>(std::size(title)));
-    RECT titleRect = client;
-    titleRect.left += Scale(16);
-    titleRect.right -= Scale(16);
-    titleRect.top += Scale(10);
-    titleRect.bottom = titleRect.top + Scale(24);
-
-    SetBkMode(drawDc, TRANSPARENT);
-    SetTextColor(drawDc, ThemeManager::TextColor());
-    GdiUtils::SelectObjectScope fontScope(drawDc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
-    DrawTextW(drawDc, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    EndPaint(hwnd, &paint);
-}
-
-LRESULT CALLBACK CardPanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    switch (message)
-    {
-    case WM_PAINT:
-        PaintCardPanel(hwnd);
-        return 0;
-
-    case WM_ERASEBKGND:
-        return TRUE;
-
-    case WM_SETTEXT:
-    {
-        const LRESULT result = DefWindowProcW(hwnd, message, wParam, lParam);
-        InvalidateRect(hwnd, nullptr, TRUE);
-        return result;
-    }
-    }
-
-    return DefWindowProcW(hwnd, message, wParam, lParam);
-}
-
-void EnsureCardPanelClass()
-{
-    static bool registered = false;
-    if (registered)
-    {
-        return;
-    }
-
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = CardPanelProc;
-    wc.hInstance = g_hInst;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr;
-    wc.lpszClassName = kCardPanelClass;
-    RegisterClassExW(&wc);
-    registered = true;
-}
-
-HWND CreateCardPanel(const wchar_t* text, int id)
-{
-    EnsureCardPanelClass();
-    HWND parent = g_contentPanel ? g_contentPanel : g_hWnd;
-    return CreateWindowExW(
-        0,
-        kCardPanelClass,
-        text,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0,
-        0,
-        10,
-        10,
-        parent,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
         g_hInst,
         nullptr);
 }
@@ -645,34 +515,20 @@ std::wstring StatusLine(const wchar_t* chineseLabel, const wchar_t* englishLabel
 
 void RefreshGameList()
 {
-    if (!g_gameList)
-    {
-        return;
-    }
-
-    SendMessageW(g_gameList, LB_RESETCONTENT, 0, 0);
-    for (const auto& game : g_gameExeNames)
-    {
-        SendMessageW(g_gameList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(game.c_str()));
-    }
-
+    ClampGameListSelection();
+    InvalidateWindow(g_contentPanel);
     RefreshProtectedBrowserList();
 }
 
 std::wstring GetSelectedGameName()
 {
-    if (!g_gameList)
+    ClampGameListSelection();
+    if (g_selectedGameIndex < 0 || g_selectedGameIndex >= static_cast<int>(g_gameExeNames.size()))
     {
         return L"";
     }
 
-    const int selected = static_cast<int>(SendMessageW(g_gameList, LB_GETCURSEL, 0, 0));
-    if (selected == LB_ERR || selected < 0 || selected >= static_cast<int>(g_gameExeNames.size()))
-    {
-        return L"";
-    }
-
-    return g_gameExeNames[selected];
+    return g_gameExeNames[g_selectedGameIndex];
 }
 
 std::wstring GetSelectedBrowserGameName()
@@ -691,228 +547,419 @@ std::wstring GetSelectedBrowserGameName()
     return g_gameExeNames[selected];
 }
 
+RECT VisualRect(const RECT& logicalRect, int scrollY)
+{
+    RECT rect = logicalRect;
+    OffsetRect(&rect, 0, -scrollY);
+    return rect;
+}
+
+void DrawPanelText(HDC hdc, const std::wstring& text, RECT rect, COLORREF color, HFONT font, UINT format)
+{
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, color);
+    GdiUtils::SelectObjectScope fontScope(hdc, font ? font : GetStockObject(DEFAULT_GUI_FONT));
+    DrawTextW(hdc, text.c_str(), -1, &rect, format);
+}
+
+UiButton* FindContentButton(int id)
+{
+    auto it = std::find_if(g_contentButtons.begin(), g_contentButtons.end(), [id](const UiButton& button) {
+        return button.id == id;
+    });
+    return it == g_contentButtons.end() ? nullptr : &(*it);
+}
+
+void AddContentButton(int id, const RECT& rect, const std::wstring& text, bool enabled = true)
+{
+    UiButton button{};
+    button.id = id;
+    button.rect = rect;
+    button.text = text;
+    button.enabled = enabled;
+    if (const UiButton* oldButton = FindContentButton(id))
+    {
+        button.hot = oldButton->hot;
+        button.pressed = oldButton->pressed;
+    }
+    g_contentButtons.push_back(std::move(button));
+}
+
+void DrawPanelButton(HDC hdc, const UiButton& button, int scrollY)
+{
+    RECT rect = VisualRect(button.rect, scrollY);
+    COLORREF fill = ThemeManager::ButtonColor();
+    if (!button.enabled)
+    {
+        fill = ThemeManager::SurfaceColor();
+    }
+    else if (button.pressed)
+    {
+        fill = ThemeManager::ButtonPressedColor();
+    }
+    else if (button.hot)
+    {
+        fill = ThemeManager::ButtonHotColor();
+    }
+
+    GdiUtils::FillRoundRect(hdc, rect, fill, ThemeManager::BorderColor(), Scale(7));
+    DrawPanelText(hdc, button.text, rect, button.enabled ? ThemeManager::TextColor() : ThemeManager::DisabledTextColor(),
+        ThemeManager::UiFont(), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawCard(HDC hdc, const RECT& logicalRect, int scrollY, const std::wstring& title)
+{
+    RECT rect = VisualRect(logicalRect, scrollY);
+    GdiUtils::FillRoundRect(hdc, rect, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(8));
+    RECT titleRect = rect;
+    titleRect.left += Scale(16);
+    titleRect.right -= Scale(16);
+    titleRect.top += Scale(10);
+    titleRect.bottom = titleRect.top + Scale(24);
+    DrawPanelText(hdc, title, titleRect, ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawFeatureRow(HDC hdc, int scrollY, int labelX, int stateX, int y, const std::wstring& label, const std::wstring& value)
+{
+    RECT labelRect{ labelX, y, labelX + Scale(150), y + Scale(24) };
+    RECT stateRect{ stateX, y, stateX + Scale(76), y + Scale(24) };
+    DrawPanelText(hdc, label, VisualRect(labelRect, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawPanelText(hdc, value, VisualRect(stateRect, scrollY), ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+int GameListVisibleRows()
+{
+    const int itemHeight = Scale(28);
+    const int listHeight = g_contentLayout.listRect.bottom - g_contentLayout.listRect.top;
+    return itemHeight > 0 ? std::max(1, listHeight / itemHeight) : 1;
+}
+
+void ClampGameListSelection()
+{
+    const int itemCount = static_cast<int>(g_gameExeNames.size());
+    if (itemCount <= 0)
+    {
+        g_selectedGameIndex = -1;
+        g_gameListTopIndex = 0;
+        return;
+    }
+
+    g_selectedGameIndex = std::clamp(g_selectedGameIndex, -1, itemCount - 1);
+    const int visibleRows = GameListVisibleRows();
+    const int maxTop = std::max(0, itemCount - visibleRows);
+    g_gameListTopIndex = std::clamp(g_gameListTopIndex, 0, maxTop);
+    if (g_selectedGameIndex >= 0)
+    {
+        if (g_selectedGameIndex < g_gameListTopIndex)
+        {
+            g_gameListTopIndex = g_selectedGameIndex;
+        }
+        else if (g_selectedGameIndex >= g_gameListTopIndex + visibleRows)
+        {
+            g_gameListTopIndex = std::min(maxTop, g_selectedGameIndex - visibleRows + 1);
+        }
+    }
+}
+
+void DrawProgramList(HDC hdc, int scrollY)
+{
+    ClampGameListSelection();
+
+    RECT listRect = VisualRect(g_contentLayout.listRect, scrollY);
+    GdiUtils::FillRoundRect(hdc, listRect, ThemeManager::WindowColor(), ThemeManager::BorderColor(), Scale(6));
+
+    RECT clipRect = listRect;
+    InflateRect(&clipRect, -Scale(1), -Scale(1));
+    HRGN previousClip = CreateRectRgn(0, 0, 0, 0);
+    const int previousClipType = GetClipRgn(hdc, previousClip);
+    HRGN listClip = CreateRectRgn(clipRect.left, clipRect.top, clipRect.right, clipRect.bottom);
+    SelectClipRgn(hdc, listClip);
+    DeleteObject(listClip);
+
+    const int itemHeight = Scale(28);
+    const int itemCount = static_cast<int>(g_gameExeNames.size());
+    const int visibleRows = GameListVisibleRows();
+    if (itemCount == 0)
+    {
+        RECT emptyRect = clipRect;
+        emptyRect.left += Scale(12);
+        DrawPanelText(hdc, Text(L"尚未添加受保护程序", L"No protected programs yet"), emptyRect,
+            ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    else
+    {
+        for (int row = 0; row < visibleRows; ++row)
+        {
+            const int index = g_gameListTopIndex + row;
+            if (index >= itemCount)
+            {
+                break;
+            }
+
+            RECT itemRect{
+                clipRect.left,
+                clipRect.top + row * itemHeight,
+                clipRect.right,
+                clipRect.top + (row + 1) * itemHeight
+            };
+            if (index == g_selectedGameIndex)
+            {
+                HBRUSH selectedBrush = CreateSolidBrush(ThemeManager::ButtonHotColor());
+                FillRect(hdc, &itemRect, selectedBrush);
+                DeleteObject(selectedBrush);
+            }
+
+            RECT textRect = itemRect;
+            textRect.left += Scale(10);
+            textRect.right -= Scale(12);
+            DrawPanelText(hdc, g_gameExeNames[index], textRect, ThemeManager::TextColor(), ThemeManager::UiFont(),
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            GdiUtils::DrawSeparator(hdc, itemRect.left + Scale(8), itemRect.right - Scale(8), itemRect.bottom - 1, ThemeManager::BorderColor());
+        }
+    }
+
+    if (itemCount > visibleRows)
+    {
+        RECT track{ listRect.right - Scale(8), listRect.top + Scale(4), listRect.right - Scale(4), listRect.bottom - Scale(4) };
+        HBRUSH trackBrush = CreateSolidBrush(ThemeManager::SurfaceColor());
+        FillRect(hdc, &track, trackBrush);
+        DeleteObject(trackBrush);
+
+        const int trackHeight = std::max(1, static_cast<int>(track.bottom - track.top));
+        const int thumbHeight = std::max(Scale(18), MulDiv(trackHeight, visibleRows, itemCount));
+        const int maxTop = std::max(1, itemCount - visibleRows);
+        const int thumbTop = track.top + MulDiv(trackHeight - thumbHeight, g_gameListTopIndex, maxTop);
+        RECT thumb{ track.left, thumbTop, track.right, thumbTop + thumbHeight };
+        HBRUSH thumbBrush = CreateSolidBrush(ThemeManager::MutedTextColor());
+        FillRect(hdc, &thumb, thumbBrush);
+        DeleteObject(thumbBrush);
+    }
+
+    if (previousClipType == 1)
+    {
+        SelectClipRgn(hdc, previousClip);
+    }
+    else
+    {
+        SelectClipRgn(hdc, nullptr);
+    }
+    DeleteObject(previousClip);
+}
+
+void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
+{
+    UNREFERENCED_PARAMETER(panel);
+    HRGN clipRegion = CreateRectRgn(client.left, client.top, client.right, client.bottom);
+    SelectClipRgn(hdc, clipRegion);
+    DeleteObject(clipRegion);
+
+    HICON icon = LoadIconW(g_hInst, MAKEINTRESOURCEW(IDI_FFKEYLOCK));
+    RECT iconRect = VisualRect(g_contentLayout.icon, scrollY);
+    if (icon)
+    {
+        DrawIconEx(hdc, iconRect.left, iconRect.top, icon, iconRect.right - iconRect.left, iconRect.bottom - iconRect.top, 0, nullptr, DI_NORMAL);
+    }
+    DrawPanelText(hdc, L"FFKeyLock", VisualRect(g_contentLayout.title, scrollY), ThemeManager::TextColor(), ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawPanelText(hdc, Text(L"游戏防误触助手", L"Game mis-touch protection assistant"), VisualRect(g_contentLayout.subtitle, scrollY),
+        ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    DrawCard(hdc, g_contentLayout.statusCard, scrollY, Text(L"当前状态", L"Current status"));
+    const bool canShowDetectedGame = g_protectionEnabled && g_autoDetectEnabled && !g_currentDetectedGameName.empty();
+    const std::wstring detectedGame = canShowDetectedGame ? g_currentDetectedGameName : Text(L"无", L"None");
+    const std::wstring inputLanguage = CurrentInputLanguageText();
+    DrawPanelText(hdc, BuildPrimaryStatusText(), VisualRect(g_contentLayout.primaryStatus, scrollY), ThemeManager::AccentColor(), ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawPanelText(hdc, StatusLine(L"当前检测到：", L"Detected: ", detectedGame), VisualRect(g_contentLayout.detectedStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawPanelText(hdc, StatusLine(L"输入法状态：", L"Input language: ", inputLanguage), VisualRect(g_contentLayout.inputStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawPanelText(hdc, StatusLine(L"Win 键锁定：", L"Win key lock: ", EnabledText(g_windowsKeyGuardEnabled)), VisualRect(g_contentLayout.winKeyStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    DrawCard(hdc, g_contentLayout.featureCard, scrollY, Text(L"功能开关", L"Feature switches"));
+    const int margin = Scale(24);
+    const int contentWidth = g_contentLayout.featureCard.right - g_contentLayout.featureCard.left;
+    const int groupInnerLeft = margin + Scale(20);
+    const int switchStateX = margin + Scale(160);
+    const int secondColX = margin + std::max(Scale(430), contentWidth / 2 + Scale(16));
+    const int secondStateX = secondColX + Scale(132);
+    DrawFeatureRow(hdc, scrollY, groupInnerLeft, switchStateX, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
+    DrawFeatureRow(hdc, scrollY, groupInnerLeft, switchStateX, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
+    DrawFeatureRow(hdc, scrollY, secondColX, secondStateX, g_contentLayout.featureCard.top + Scale(34), Text(L"开机启动", L"Startup"), EnabledText(IsStartupEnabled()));
+    DrawFeatureRow(hdc, scrollY, secondColX, secondStateX, g_contentLayout.featureCard.top + Scale(78), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
+
+    DrawCard(hdc, g_contentLayout.programsCard, scrollY, Text(L"受保护程序", L"Protected programs"));
+    DrawPanelText(hdc, Text(L"程序列表", L"Program list"), VisualRect(g_contentLayout.programLabel, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    DrawProgramList(hdc, scrollY);
+
+    for (const UiButton& button : g_contentButtons)
+    {
+        DrawPanelButton(hdc, button, scrollY);
+    }
+    SelectClipRgn(hdc, nullptr);
+}
+
+int HitTestContentPanelButton(HWND, POINT point, int scrollY)
+{
+    POINT logicalPoint{ point.x, point.y + scrollY };
+    for (const UiButton& button : g_contentButtons)
+    {
+        if (button.enabled && PtInRect(&button.rect, logicalPoint))
+        {
+            return button.id;
+        }
+    }
+    return 0;
+}
+
+void SetContentButtonState(HWND, int id, bool hot, bool pressed)
+{
+    if (UiButton* button = FindContentButton(id))
+    {
+        button->hot = hot;
+        button->pressed = pressed;
+    }
+}
+
+int HitTestGameListItem(POINT point, int scrollY)
+{
+    POINT logicalPoint{ point.x, point.y + scrollY };
+    if (!PtInRect(&g_contentLayout.listRect, logicalPoint))
+    {
+        return -1;
+    }
+
+    const int itemHeight = Scale(28);
+    if (itemHeight <= 0)
+    {
+        return -1;
+    }
+
+    const int row = (logicalPoint.y - g_contentLayout.listRect.top) / itemHeight;
+    const int index = g_gameListTopIndex + row;
+    return index >= 0 && index < static_cast<int>(g_gameExeNames.size()) ? index : -1;
+}
+
+void ContentPanelClicked(HWND panel, POINT point, int scrollY)
+{
+    const int index = HitTestGameListItem(point, scrollY);
+    if (index >= 0)
+    {
+        g_selectedGameIndex = index;
+        ClampGameListSelection();
+        InvalidateWindow(panel);
+    }
+}
+
+bool ContentPanelWheel(HWND, POINT point, int scrollY, int delta)
+{
+    POINT logicalPoint{ point.x, point.y + scrollY };
+    if (!PtInRect(&g_contentLayout.listRect, logicalPoint))
+    {
+        return false;
+    }
+
+    const int itemCount = static_cast<int>(g_gameExeNames.size());
+    const int visibleRows = GameListVisibleRows();
+    const int maxTop = std::max(0, itemCount - visibleRows);
+    if (maxTop <= 0)
+    {
+        return false;
+    }
+
+    const int lines = std::max(1, std::abs(delta) / WHEEL_DELTA);
+    if (delta > 0)
+    {
+        g_gameListTopIndex -= lines;
+    }
+    else
+    {
+        g_gameListTopIndex += lines;
+    }
+    g_gameListTopIndex = std::clamp(g_gameListTopIndex, 0, maxTop);
+    return true;
+}
+
 void CreateMainControls()
 {
-    g_appIcon = CreateControl(L"STATIC", L"", SS_ICON | SS_CENTERIMAGE, 20, 18, 48, 48, IDC_APP_ICON);
-    if (g_appIcon)
-    {
-        SendMessageW(g_appIcon, STM_SETICON, reinterpret_cast<WPARAM>(LoadIconW(g_hInst, MAKEINTRESOURCEW(IDI_FFKEYLOCK))), 0);
-    }
-
-    g_titleText = CreateControl(L"STATIC", L"FFKeyLock", SS_LEFT, 80, 18, 220, 30, IDC_STATIC);
-    if (g_titleText)
-    {
-        SendMessageW(g_titleText, WM_SETFONT, reinterpret_cast<WPARAM>(ThemeManager::TitleFont() ? ThemeManager::TitleFont() : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-    }
-    g_subtitleText = CreateControl(L"STATIC", Text(L"游戏防误触助手", L"Game mis-touch protection assistant"), SS_LEFT, 80, 48, 260, 22, IDC_SUBTITLE_TEXT);
-
-    g_statusGroup = CreateCardPanel(Text(L"当前状态", L"Current status"), IDC_STATUS_GROUP);
-    g_statusText = CreateControl(L"STATIC", L"", SS_LEFT, 40, 112, 240, 30, IDC_STATUS_TEXT);
-    if (g_statusText)
-    {
-        SendMessageW(g_statusText, WM_SETFONT, reinterpret_cast<WPARAM>(ThemeManager::TitleFont() ? ThemeManager::TitleFont() : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-    }
-    g_statusDetectedText = CreateControl(L"STATIC", L"", SS_LEFT, 40, 146, 520, 22, IDC_STATUS_DETECTED_TEXT);
-    g_statusInputText = CreateControl(L"STATIC", L"", SS_LEFT, 40, 172, 520, 22, IDC_STATUS_INPUT_TEXT);
-    g_statusWinKeyText = CreateControl(L"STATIC", L"", SS_LEFT, 40, 198, 520, 22, IDC_STATUS_WINKEY_TEXT);
-
-    g_featureGroup = CreateCardPanel(Text(L"功能开关", L"Feature switches"), IDC_FEATURE_GROUP);
-    g_protectionLabel = CreateControl(L"STATIC", Text(L"保护模式", L"Protection mode"), SS_LEFT, 40, 266, 160, 22, IDC_PROTECTION_LABEL);
-    g_protectionStateText = CreateControl(L"STATIC", L"", SS_LEFT, 220, 266, 100, 22, IDC_PROTECTION_STATE_TEXT);
-    g_protectionButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 340, 260, 90, 32, IDC_PROTECTION_BUTTON);
-    g_autoDetectLabel = CreateControl(L"STATIC", Text(L"自动检测", L"Auto detect"), SS_LEFT, 40, 306, 160, 22, IDC_AUTO_DETECT_LABEL);
-    g_autoDetectStateText = CreateControl(L"STATIC", L"", SS_LEFT, 220, 306, 100, 22, IDC_AUTO_DETECT_STATE_TEXT);
-    g_autoDetectButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 340, 300, 90, 32, IDC_AUTO_DETECT_BUTTON);
-    g_startupLabel = CreateControl(L"STATIC", Text(L"开机启动", L"Startup"), SS_LEFT, 470, 266, 160, 22, IDC_STARTUP_LABEL);
-    g_startupStateText = CreateControl(L"STATIC", L"", SS_LEFT, 640, 266, 100, 22, IDC_STARTUP_STATE_TEXT);
-    g_startupButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 740, 260, 90, 32, IDC_STARTUP_BUTTON);
-    g_windowsKeyLabel = CreateControl(L"STATIC", Text(L"Win 键锁定", L"Win key lock"), SS_LEFT, 470, 306, 160, 22, IDC_WINDOWS_KEY_LABEL);
-    g_windowsKeyStateText = CreateControl(L"STATIC", L"", SS_LEFT, 640, 306, 100, 22, IDC_WINDOWS_KEY_STATE_TEXT);
-    g_windowsKeyButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 740, 300, 90, 32, IDC_WINDOWS_KEY_BUTTON);
-
-    g_programsGroup = CreateCardPanel(Text(L"受保护程序", L"Protected programs"), IDC_PROGRAMS_GROUP);
-    g_gameListLabel = CreateControl(L"STATIC", Text(L"程序列表", L"Program list"), SS_LEFT, 40, 486, 126, 24, IDC_STATIC);
-    g_gameListHelpButton = CreateControl(L"BUTTON", L"?", BS_PUSHBUTTON, 150, 482, 28, 28, IDC_GAME_LIST_HELP);
-    g_gameList = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"LISTBOX",
-        nullptr,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
-        Scale(40),
-        Scale(514),
-        Scale(630),
-        Scale(70),
-        g_contentPanel ? g_contentPanel : g_hWnd,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_GAME_LIST)),
-        g_hInst,
-        nullptr);
-    if (g_gameList)
-    {
-        SetDefaultFont(g_gameList);
-    }
-
-    g_addCurrentButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 700, 514, 130, 32, IDC_ADD_GAME_BUTTON);
-    g_browseProtectedButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 700, 552, 130, 32, IDC_BROWSE_PROTECTED_BUTTON);
-    g_addFileButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 700, 590, 130, 32, IDC_ADD_FILE_BUTTON);
-    g_deleteGameButton = CreateControl(L"BUTTON", L"", BS_PUSHBUTTON, 700, 628, 130, 32, IDC_DELETE_GAME_BUTTON);
     UpdateMainWindow();
 }
 
 int LayoutContentControls(HWND panel, int width, int height, int scrollY)
 {
     UNREFERENCED_PARAMETER(panel);
+    {
+        g_scrollY = std::max(0, scrollY);
+        const int viewportHeight = std::max(0, height);
+        const int margin = Scale(24);
+        const int groupSpacing = Scale(18);
+        const int buttonHeight = Scale(32);
+        const int buttonGap = Scale(10);
+        const int switchButtonWidth = Scale(104);
+        const int actionButtonWidth = Scale(130);
+        const int contentWidth = std::max(Scale(320), width - margin * 2);
+        const bool twoColumnFeatures = contentWidth >= Scale(680);
+        const bool wideProgramActions = contentWidth >= Scale(620);
+        const int headerY = Scale(18);
+        const int headerHeight = Scale(80);
+        const int statusY = headerY + headerHeight + groupSpacing;
+        const int statusHeight = Scale(158);
+        const int featureY = statusY + statusHeight + groupSpacing;
+        const int featureHeight = twoColumnFeatures ? Scale(126) : Scale(220);
+        const int programsY = featureY + featureHeight + groupSpacing;
+        const int programsHeight = std::max(wideProgramActions ? Scale(250) : Scale(360), viewportHeight - programsY - margin);
+        g_contentHeight = programsY + programsHeight + margin;
+        const int maxScroll = std::max(0, g_contentHeight - viewportHeight);
+        g_scrollY = std::clamp(g_scrollY, 0, maxScroll);
 
-    g_scrollY = std::max(0, scrollY);
-    const int viewportHeight = std::max(0, height);
-    const int margin = Scale(24);
-    const int groupSpacing = Scale(18);
-    const int buttonHeight = Scale(32);
-    const int switchButtonWidth = Scale(104);
-    const int actionButtonWidth = Scale(130);
-    const int contentWidth = std::max(Scale(860), width - margin * 2 - GetSystemMetrics(SM_CXVSCROLL));
-    const int headerY = Scale(18);
-    const int headerHeight = Scale(80);
-    const int statusY = headerY + headerHeight + groupSpacing;
-    const int statusHeight = Scale(158);
-    const int featureY = statusY + statusHeight + groupSpacing;
-    const int featureHeight = Scale(126);
-    const int programsY = featureY + featureHeight + groupSpacing;
-    const int programsHeight = std::max(Scale(250), viewportHeight - programsY - margin);
-    g_contentHeight = programsY + programsHeight + margin;
-    const int maxScroll = std::max(0, g_contentHeight - viewportHeight);
-    g_scrollY = std::clamp(g_scrollY, 0, maxScroll);
+        const int groupInnerLeft = margin + Scale(20);
+        const int groupRight = margin + contentWidth;
+        const int switchButtonX = margin + Scale(254);
+        const int secondColX = margin + std::max(Scale(430), contentWidth / 2 + Scale(16));
+        const int secondButtonX = groupRight - Scale(20) - switchButtonWidth;
+        const int listX = groupInnerLeft;
+        const int listY = programsY + Scale(52);
+        const int actionButtonX = wideProgramActions ? groupRight - Scale(20) - actionButtonWidth : listX;
+        const int listWidth = wideProgramActions
+            ? std::max(Scale(260), actionButtonX - Scale(20) - listX)
+            : std::max(Scale(260), groupRight - Scale(20) - listX);
+        const int listHeight = wideProgramActions ? std::max(Scale(128), programsHeight - Scale(74)) : Scale(160);
+        const int actionButtonY = wideProgramActions ? listY : listY + listHeight + Scale(14);
+        const int narrowActionWidth = std::max(Scale(120), (listWidth - buttonGap) / 2);
 
-    const int groupInnerLeft = margin + Scale(20);
-    const int groupRight = margin + contentWidth;
-    const int switchStateX = margin + Scale(160);
-    const int switchButtonX = margin + Scale(254);
-    const int secondColX = margin + std::max(Scale(430), contentWidth / 2 + Scale(16));
-    const int secondStateX = secondColX + Scale(132);
-    const int secondButtonX = groupRight - Scale(20) - switchButtonWidth;
-    const int listX = groupInnerLeft;
-    const int listY = programsY + Scale(52);
-    const int actionButtonX = groupRight - Scale(20) - actionButtonWidth;
-    const int listWidth = std::max(Scale(300), actionButtonX - Scale(20) - listX);
-    const int listHeight = std::max(Scale(128), programsHeight - Scale(74));
-    auto y = [&](int logicalY) { return logicalY - g_scrollY; };
+        g_contentLayout.icon = RECT{ margin, headerY + Scale(10), margin + Scale(48), headerY + Scale(58) };
+        g_contentLayout.title = RECT{ margin + Scale(64), headerY + Scale(8), groupRight, headerY + Scale(38) };
+        g_contentLayout.subtitle = RECT{ margin + Scale(64), headerY + Scale(42), groupRight, headerY + Scale(64) };
+        g_contentLayout.statusCard = RECT{ margin, statusY, margin + contentWidth, statusY + statusHeight };
+        g_contentLayout.primaryStatus = RECT{ groupInnerLeft, statusY + Scale(30), groupInnerLeft + Scale(320), statusY + Scale(60) };
+        g_contentLayout.detectedStatus = RECT{ groupInnerLeft, statusY + Scale(68), groupRight - Scale(20), statusY + Scale(92) };
+        g_contentLayout.inputStatus = RECT{ groupInnerLeft, statusY + Scale(96), groupRight - Scale(20), statusY + Scale(120) };
+        g_contentLayout.winKeyStatus = RECT{ groupInnerLeft, statusY + Scale(124), groupRight - Scale(20), statusY + Scale(148) };
+        g_contentLayout.featureCard = RECT{ margin, featureY, margin + contentWidth, featureY + featureHeight };
+        g_contentLayout.programsCard = RECT{ margin, programsY, margin + contentWidth, programsY + programsHeight };
+        g_contentLayout.programLabel = RECT{ listX, programsY + Scale(28), listX + Scale(110), programsY + Scale(52) };
+        g_contentLayout.listRect = RECT{ listX, listY, listX + listWidth, listY + listHeight };
+        g_contentLayout.contentHeight = g_contentHeight;
 
-    if (g_titleText)
-    {
-        MoveChildWindow(g_titleText, margin + Scale(64), y(headerY + Scale(8)), Scale(260), Scale(30));
+        g_contentButtons.clear();
+        AddContentButton(IDC_PROTECTION_BUTTON, RECT{ switchButtonX, featureY + Scale(28), switchButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled));
+        AddContentButton(IDC_AUTO_DETECT_BUTTON, RECT{ switchButtonX, featureY + Scale(72), switchButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_autoDetectEnabled));
+        if (twoColumnFeatures)
+        {
+            AddContentButton(IDC_STARTUP_BUTTON, RECT{ secondButtonX, featureY + Scale(28), secondButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
+            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ secondButtonX, featureY + Scale(72), secondButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
+        }
+        else
+        {
+            AddContentButton(IDC_STARTUP_BUTTON, RECT{ switchButtonX, featureY + Scale(116), switchButtonX + switchButtonWidth, featureY + Scale(116) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
+            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ switchButtonX, featureY + Scale(160), switchButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
+        }
+        AddContentButton(IDC_GAME_LIST_HELP, RECT{ listX + Scale(110), programsY + Scale(24), listX + Scale(138), programsY + Scale(52) }, L"?");
+        AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加程序", L"Add program"));
+        AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ actionButtonX, listY + Scale(42), actionButtonX + actionButtonWidth, listY + Scale(42) + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
+        AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + Scale(84), actionButtonX + actionButtonWidth, listY + Scale(84) + buttonHeight }, Text(L"从文件选择", L"Choose file"));
+        AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ actionButtonX, listY + Scale(126), actionButtonX + actionButtonWidth, listY + Scale(126) + buttonHeight }, Text(L"删除选中", L"Delete selected"));
+
+        ClampGameListSelection();
+        return g_contentHeight;
     }
-    if (g_subtitleText)
-    {
-        MoveChildWindow(g_subtitleText, margin + Scale(64), y(headerY + Scale(42)), Scale(320), Scale(22));
-    }
-    if (g_appIcon)
-    {
-        MoveChildWindow(g_appIcon, margin, y(headerY + Scale(10)), Scale(48), Scale(48));
-    }
-    if (g_statusGroup)
-    {
-        MoveCardPanel(g_statusGroup, margin, y(statusY), contentWidth, statusHeight);
-    }
-    if (g_statusText)
-    {
-        MoveChildWindow(g_statusText, groupInnerLeft, y(statusY + Scale(30)), Scale(320), Scale(30));
-    }
-    if (g_statusDetectedText)
-    {
-        MoveChildWindow(g_statusDetectedText, groupInnerLeft, y(statusY + Scale(68)), contentWidth - Scale(40), Scale(24));
-    }
-    if (g_statusInputText)
-    {
-        MoveChildWindow(g_statusInputText, groupInnerLeft, y(statusY + Scale(96)), contentWidth - Scale(40), Scale(24));
-    }
-    if (g_statusWinKeyText)
-    {
-        MoveChildWindow(g_statusWinKeyText, groupInnerLeft, y(statusY + Scale(124)), contentWidth - Scale(40), Scale(24));
-    }
-    if (g_featureGroup)
-    {
-        MoveCardPanel(g_featureGroup, margin, y(featureY), contentWidth, featureHeight);
-    }
-    if (g_protectionLabel)
-    {
-        MoveChildWindow(g_protectionLabel, groupInnerLeft, y(featureY + Scale(34)), Scale(150), Scale(22));
-    }
-    if (g_protectionStateText)
-    {
-        MoveChildWindow(g_protectionStateText, switchStateX, y(featureY + Scale(34)), Scale(76), Scale(22));
-    }
-    if (g_protectionButton)
-    {
-        MoveChildWindow(g_protectionButton, switchButtonX, y(featureY + Scale(28)), switchButtonWidth, buttonHeight);
-    }
-    if (g_autoDetectLabel)
-    {
-        MoveChildWindow(g_autoDetectLabel, groupInnerLeft, y(featureY + Scale(78)), Scale(150), Scale(22));
-    }
-    if (g_autoDetectStateText)
-    {
-        MoveChildWindow(g_autoDetectStateText, switchStateX, y(featureY + Scale(78)), Scale(76), Scale(22));
-    }
-    if (g_autoDetectButton)
-    {
-        MoveChildWindow(g_autoDetectButton, switchButtonX, y(featureY + Scale(72)), switchButtonWidth, buttonHeight);
-    }
-    if (g_startupLabel)
-    {
-        MoveChildWindow(g_startupLabel, secondColX, y(featureY + Scale(34)), Scale(150), Scale(22));
-    }
-    if (g_startupStateText)
-    {
-        MoveChildWindow(g_startupStateText, secondStateX, y(featureY + Scale(34)), Scale(76), Scale(22));
-    }
-    if (g_startupButton)
-    {
-        MoveChildWindow(g_startupButton, secondButtonX, y(featureY + Scale(28)), switchButtonWidth, buttonHeight);
-    }
-    if (g_windowsKeyLabel)
-    {
-        MoveChildWindow(g_windowsKeyLabel, secondColX, y(featureY + Scale(78)), Scale(150), Scale(22));
-    }
-    if (g_windowsKeyStateText)
-    {
-        MoveChildWindow(g_windowsKeyStateText, secondStateX, y(featureY + Scale(78)), Scale(76), Scale(22));
-    }
-    if (g_windowsKeyButton)
-    {
-        MoveChildWindow(g_windowsKeyButton, secondButtonX, y(featureY + Scale(72)), switchButtonWidth, buttonHeight);
-    }
-    if (g_programsGroup)
-    {
-        MoveCardPanel(g_programsGroup, margin, y(programsY), contentWidth, programsHeight);
-    }
-    if (g_gameListLabel)
-    {
-        MoveChildWindow(g_gameListLabel, listX, y(programsY + Scale(28)), Scale(110), Scale(24));
-    }
-    if (g_gameListHelpButton)
-    {
-        MoveChildWindow(g_gameListHelpButton, listX + Scale(110), y(programsY + Scale(24)), Scale(28), Scale(28));
-    }
-    if (g_gameList)
-    {
-        MoveChildWindow(g_gameList, listX, y(listY), listWidth, listHeight);
-    }
-    if (g_addCurrentButton)
-    {
-        MoveChildWindow(g_addCurrentButton, actionButtonX, y(listY), actionButtonWidth, buttonHeight);
-    }
-    if (g_browseProtectedButton)
-    {
-        MoveChildWindow(g_browseProtectedButton, actionButtonX, y(listY + Scale(42)), actionButtonWidth, buttonHeight);
-    }
-    if (g_addFileButton)
-    {
-        MoveChildWindow(g_addFileButton, actionButtonX, y(listY + Scale(84)), actionButtonWidth, buttonHeight);
-    }
-    if (g_deleteGameButton)
-    {
-        MoveChildWindow(g_deleteGameButton, actionButtonX, y(listY + Scale(126)), actionButtonWidth, buttonHeight);
-    }
-    return g_contentHeight;
 }
 
 void ResizeMainControls(int width, int height)
@@ -921,12 +968,11 @@ void ResizeMainControls(int width, int height)
     if (g_menuBar)
     {
         SetWindowPos(g_menuBar, HWND_TOP, 0, 0, width, menuHeight, SWP_NOACTIVATE);
-        InvalidateFully(g_menuBar);
+        InvalidateWindow(g_menuBar);
     }
     if (g_contentPanel)
     {
         SetWindowPos(g_contentPanel, nullptr, 0, menuHeight, width, std::max(0, height - menuHeight), SWP_NOZORDER | SWP_NOACTIVATE);
-        ContentPanel::Relayout(g_contentPanel);
     }
 }
 
@@ -941,56 +987,13 @@ void ApplyTheme()
     }
     if (g_hWnd)
     {
-        RedrawFully(g_hWnd);
-    }
-    if (g_gameList)
-    {
-        InvalidateFully(g_gameList);
+        InvalidateWindowAndChildren(g_hWnd);
     }
 }
 
 bool IsOwnWindow(HWND hwnd)
 {
     return hwnd && g_hWnd && GetAncestor(hwnd, GA_ROOT) == g_hWnd;
-}
-
-bool IsControlInsidePanel(HWND control, HWND panel)
-{
-    if (!control || !panel)
-    {
-        return false;
-    }
-
-    RECT controlRect{};
-    RECT panelRect{};
-    if (!GetWindowRect(control, &controlRect) || !GetWindowRect(panel, &panelRect))
-    {
-        return false;
-    }
-
-    POINT center{
-        controlRect.left + (controlRect.right - controlRect.left) / 2,
-        controlRect.top + (controlRect.bottom - controlRect.top) / 2
-    };
-    return PtInRect(&panelRect, center) != FALSE;
-}
-
-bool StaticUsesSurfaceBackground(HWND control)
-{
-    return IsControlInsidePanel(control, g_statusGroup)
-        || IsControlInsidePanel(control, g_featureGroup)
-        || IsControlInsidePanel(control, g_programsGroup);
-}
-
-HBRUSH ContentPanelCtlColorStatic(HWND, HDC hdc, HWND control)
-{
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, control == g_statusText ? ThemeManager::AccentColor() : ThemeManager::TextColor());
-    if (StaticUsesSurfaceBackground(control))
-    {
-        return ThemeManager::SurfaceBrush() ? ThemeManager::SurfaceBrush() : reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
-    }
-    return ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
 }
 
 void AddGameFromFileDialog()
@@ -1015,16 +1018,12 @@ void AddGameFromFileDialog()
 
 void DeleteSelectedGame()
 {
-    if (!g_gameList)
-    {
-        return;
-    }
-
-    const int selected = static_cast<int>(SendMessageW(g_gameList, LB_GETCURSEL, 0, 0));
-    if (selected == LB_ERR || selected < 0 || selected >= static_cast<int>(g_gameExeNames.size()))
+    ClampGameListSelection();
+    const int selected = g_selectedGameIndex;
+    if (selected < 0 || selected >= static_cast<int>(g_gameExeNames.size()))
     {
         MessageBoxW(g_hWnd,
-            Text(L"请先在受保护的程序列表中选择一项。", L"Select an item in the protected program list first."),
+            Text(L"请选择一个受保护程序。", L"Select an item in the protected program list first."),
             L"FFKeyLock",
             MB_OK | MB_ICONINFORMATION);
         return;
@@ -1033,16 +1032,11 @@ void DeleteSelectedGame()
     const std::wstring exeName = g_gameExeNames[selected];
     g_gameExeNames.erase(g_gameExeNames.begin() + selected);
     g_gameExePaths.erase(exeName);
+    g_selectedGameIndex = std::min(selected, static_cast<int>(g_gameExeNames.size()) - 1);
+    ClampGameListSelection();
     SaveConfig();
     RefreshGameList();
-    const int lastIndex = static_cast<int>(g_gameExeNames.size()) - 1;
-    const int nextSelection = (std::min)(selected, lastIndex);
-    if (nextSelection >= 0)
-    {
-        SendMessageW(g_gameList, LB_SETCURSEL, nextSelection, 0);
-    }
 }
-
 void CopyTextToClipboard(const std::wstring& text)
 {
     if (text.empty() || !OpenClipboard(g_hWnd))
@@ -1179,12 +1173,12 @@ LRESULT CALLBACK ProtectedBrowserProc(HWND hwnd, UINT message, WPARAM wParam, LP
                 SWP_NOZORDER | SWP_NOACTIVATE);
         }
         ThemeManager::ApplyTheme(hwnd);
-        RedrawFully(hwnd);
+        InvalidateWindowAndChildren(hwnd);
         return 0;
     }
 
     case WM_SIZE:
-        RedrawFully(hwnd);
+        InvalidateWindow(hwnd);
         return 0;
 
     case WM_CTLCOLORSTATIC:
@@ -1302,39 +1296,40 @@ void ShowProtectedListHelp()
 
 void ShowGameListContextMenu(LPARAM lParam)
 {
-    if (!g_gameList)
-    {
-        return;
-    }
-
     POINT point{};
     if (lParam == -1)
     {
-        const int selected = static_cast<int>(SendMessageW(g_gameList, LB_GETCURSEL, 0, 0));
-        RECT itemRect{};
-        if (selected != LB_ERR && SendMessageW(g_gameList, LB_GETITEMRECT, selected, reinterpret_cast<LPARAM>(&itemRect)) != LB_ERR)
+        if (g_selectedGameIndex < 0)
         {
-            point.x = itemRect.left + 16;
-            point.y = itemRect.top + 12;
-            ClientToScreen(g_gameList, &point);
+            return;
         }
-        else
+        RECT selectedRect = VisualRect(g_contentLayout.listRect, g_scrollY);
+        if (g_selectedGameIndex >= 0)
         {
-            GetCursorPos(&point);
+            const int row = g_selectedGameIndex - g_gameListTopIndex;
+            selectedRect.top += row * Scale(28);
+            selectedRect.bottom = selectedRect.top + Scale(28);
         }
+        point.x = selectedRect.left + Scale(16);
+        point.y = selectedRect.top + Scale(14);
+        ClientToScreen(g_contentPanel, &point);
     }
     else
     {
         point.x = GET_X_LPARAM(lParam);
         point.y = GET_Y_LPARAM(lParam);
         POINT clientPoint = point;
-        ScreenToClient(g_gameList, &clientPoint);
-        const DWORD hit = static_cast<DWORD>(SendMessageW(g_gameList, LB_ITEMFROMPOINT, 0, MAKELPARAM(clientPoint.x, clientPoint.y)));
-        const int index = LOWORD(hit);
-        const bool outside = HIWORD(hit) != 0;
-        if (!outside && index >= 0 && index < static_cast<int>(g_gameExeNames.size()))
+        ScreenToClient(g_contentPanel, &clientPoint);
+        const int index = HitTestGameListItem(clientPoint, g_scrollY);
+        if (index < 0)
         {
-            SendMessageW(g_gameList, LB_SETCURSEL, index, 0);
+            return;
+        }
+        else
+        {
+            g_selectedGameIndex = index;
+            ClampGameListSelection();
+            InvalidateWindow(g_contentPanel);
         }
     }
 
@@ -1345,17 +1340,6 @@ void ShowGameListContextMenu(LPARAM lParam)
 
     RoundedMenu::ShowAndDispatch(g_hWnd, point, BuildGameListContextMenu());
 }
-
-void DrawGameListItem(const DRAWITEMSTRUCT* item)
-{
-    if (!item || item->CtlID != IDC_GAME_LIST || item->itemID == static_cast<UINT>(-1))
-    {
-        return;
-    }
-
-    ThemeManager::DrawListBoxItem(*item, g_gameExeNames);
-}
-
 void PaintMainWindow(HWND hWnd)
 {
     PAINTSTRUCT paint{};
@@ -1395,7 +1379,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         CreateMenuBar(hWnd);
         g_contentPanel = ContentPanel::Create(hWnd, g_hInst);
         ContentPanel::SetLayoutCallback(g_contentPanel, LayoutContentControls);
-        ContentPanel::SetStaticCtlColorCallback(g_contentPanel, ContentPanelCtlColorStatic);
+        ContentPanel::SetPaintCallback(g_contentPanel, PaintContentPanel);
+        ContentPanel::SetButtonHitTestCallback(g_contentPanel, HitTestContentPanelButton);
+        ContentPanel::SetButtonStateCallback(g_contentPanel, SetContentButtonState);
+        ContentPanel::SetMouseClickCallback(g_contentPanel, ContentPanelClicked);
+        ContentPanel::SetMouseWheelCallback(g_contentPanel, ContentPanelWheel);
         AddTrayIcon();
         CreateMainControls();
         {
@@ -1416,7 +1404,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_SIZE:
         ResizeMainControls(LOWORD(lParam), HIWORD(lParam));
-        RedrawFully(hWnd);
+        InvalidateRect(hWnd, nullptr, TRUE);
         return 0;
 
     case WM_MOUSEWHEEL:
@@ -1445,7 +1433,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         GetClientRect(hWnd, &client);
         ResizeMainControls(client.right - client.left, client.bottom - client.top);
         ThemeManager::ApplyTheme(hWnd);
-        RedrawFully(hWnd);
+        InvalidateWindowAndChildren(hWnd);
         return 0;
     }
 
@@ -1456,12 +1444,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         RECT client{};
         GetClientRect(hWnd, &client);
         ResizeMainControls(client.right - client.left, client.bottom - client.top);
-        RedrawFully(hWnd);
+        InvalidateWindowAndChildren(hWnd);
         return 0;
     }
 
     case WM_MOVE:
-        RedrawFully(hWnd);
+        InvalidateWindow(hWnd);
         return 0;
 
     case WM_ERASEBKGND:
@@ -1475,25 +1463,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         HDC hdc = reinterpret_cast<HDC>(wParam);
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, ThemeManager::MutedTextColor());
-        HWND control = reinterpret_cast<HWND>(lParam);
-        if (control == g_titleText)
-        {
-            SetTextColor(hdc, ThemeManager::TextColor());
-            return reinterpret_cast<LRESULT>(ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : GetStockObject(WHITE_BRUSH));
-        }
-        if (control == g_subtitleText || control == g_appIcon)
-        {
-            return reinterpret_cast<LRESULT>(ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : GetStockObject(WHITE_BRUSH));
-        }
-        if (control == g_statusText)
-        {
-            SetTextColor(hdc, ThemeManager::AccentColor());
-        }
-        if (StaticUsesSurfaceBackground(control))
-        {
-            return reinterpret_cast<LRESULT>(ThemeManager::SurfaceBrush() ? ThemeManager::SurfaceBrush() : GetStockObject(WHITE_BRUSH));
-        }
+        SetTextColor(hdc, ThemeManager::TextColor());
         return reinterpret_cast<LRESULT>(ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : GetStockObject(WHITE_BRUSH));
     }
 
@@ -1516,11 +1486,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ThemeManager::MeasureMenuItem(*measureItem);
             return TRUE;
         }
-        if (measureItem && measureItem->CtlID == IDC_GAME_LIST)
-        {
-            measureItem->itemHeight = Scale(28);
-            return TRUE;
-        }
         break;
     }
 
@@ -1532,17 +1497,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ThemeManager::DrawMenuItem(*drawItem);
             return TRUE;
         }
-        if (drawItem && drawItem->CtlType == ODT_BUTTON)
-        {
-            ThemeManager::DrawButton(*drawItem);
-            return TRUE;
-        }
-        DrawGameListItem(drawItem);
-        return TRUE;
+        return FALSE;
     }
 
     case WM_CONTEXTMENU:
-        if (reinterpret_cast<HWND>(wParam) == g_gameList)
+        if (reinterpret_cast<HWND>(wParam) == g_contentPanel)
         {
             ShowGameListContextMenu(lParam);
             return 0;
@@ -1804,7 +1763,7 @@ void UpdateMainWindow()
     if (g_hWnd)
     {
         SetWindowTextW(g_hWnd, kAppName);
-        InvalidateFully(g_menuBar);
+        InvalidateWindow(g_menuBar);
     }
     if (g_statusText)
     {
@@ -1979,7 +1938,11 @@ void UpdateMainWindow()
         SetWindowTextW(g_deleteGameButton, Text(L"删除选中", L"Delete selected"));
     }
     RefreshGameList();
-    RedrawFully(g_hWnd);
+    if (g_contentPanel)
+    {
+        ContentPanel::Relayout(g_contentPanel);
+    }
+    InvalidateWindowAndChildren(g_hWnd);
 }
 
 void ShowMainWindow()
@@ -2027,7 +1990,7 @@ ATOM RegisterMainWindowClass(HINSTANCE hInstance)
 {
     WNDCLASSEXW wcex{};
     wcex.cbSize = sizeof(wcex);
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.style = 0;
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
     wcex.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_FFKEYLOCK));
@@ -2038,3 +2001,5 @@ ATOM RegisterMainWindowClass(HINSTANCE hInstance)
     return RegisterClassExW(&wcex);
 }
 }
+
+

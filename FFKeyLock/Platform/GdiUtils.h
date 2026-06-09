@@ -10,6 +10,7 @@ class BufferedPaint
 {
 public:
     BufferedPaint(HDC target, const RECT& rect);
+    BufferedPaint(HDC target, const RECT& rect, const RECT& flushRect);
     ~BufferedPaint();
 
     BufferedPaint(const BufferedPaint&) = delete;
@@ -24,6 +25,7 @@ private:
     HBITMAP bitmap_ = nullptr;
     HGDIOBJ oldBitmap_ = nullptr;
     RECT rect_{};
+    RECT flushRect_{};
     SIZE size_{};
 };
 
