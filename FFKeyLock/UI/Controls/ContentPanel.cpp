@@ -19,14 +19,21 @@ struct State
 {
     LayoutCallback layout = nullptr;
     PaintCallback paint = nullptr;
+    EnsureLayoutCallback ensureLayout = nullptr;
     ButtonHitTestCallback hitTestButton = nullptr;
     ButtonStateCallback setButtonState = nullptr;
+    MouseDownCallback mouseDown = nullptr;
     MouseClickCallback click = nullptr;
+    RightClickCallback rightClick = nullptr;
     MouseWheelCallback wheel = nullptr;
     int scrollY = 0;
     int contentHeight = 0;
     int hotButtonId = 0;
     int pressedButtonId = 0;
+    bool draggingScrollThumb = false;
+    bool suppressNextContextMenu = false;
+    int dragStartY = 0;
+    int dragStartScrollY = 0;
 };
 
 State* GetState(HWND hwnd)
@@ -34,20 +41,34 @@ State* GetState(HWND hwnd)
     return reinterpret_cast<State*>(GetPropW(hwnd, kStateProp));
 }
 
+int MaxScroll(const State& state, int viewportHeight)
+{
+    return std::max(0, state.contentHeight - std::max(0, viewportHeight));
+}
+
+RECT ScrollTrackRect(const RECT& client)
+{
+    const int trackWidth = ThemeManager::Scale(8);
+    return RECT{
+        client.right - trackWidth,
+        client.top + ThemeManager::Scale(4),
+        client.right - ThemeManager::Scale(3),
+        client.bottom - ThemeManager::Scale(4)
+    };
+}
+
+RECT ScrollThumbRect(const RECT& track, const State& state, int viewportHeight, int maxScroll)
+{
+    const int trackHeight = std::max<int>(1, track.bottom - track.top);
+    const int thumbHeight = std::max(ThemeManager::Scale(24), MulDiv(trackHeight, viewportHeight, state.contentHeight));
+    const int thumbTop = track.top + MulDiv(trackHeight - thumbHeight, state.scrollY, std::max(1, maxScroll));
+    return RECT{ track.left, thumbTop, track.right, thumbTop + thumbHeight };
+}
+
 void UpdateScrollBar(HWND hwnd, State& state, int viewportHeight)
 {
-    const int maxScroll = std::max(0, state.contentHeight - std::max(0, viewportHeight));
+    const int maxScroll = MaxScroll(state, viewportHeight);
     state.scrollY = std::clamp(state.scrollY, 0, maxScroll);
-
-    SCROLLINFO info{};
-    info.cbSize = sizeof(info);
-    info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    info.nMin = 0;
-    info.nMax = std::max(0, state.contentHeight - 1);
-    info.nPage = static_cast<UINT>(std::max(0, viewportHeight));
-    info.nPos = state.scrollY;
-    SetScrollInfo(hwnd, SB_VERT, &info, TRUE);
-    ShowScrollBar(hwnd, SB_VERT, maxScroll > 0);
 }
 
 void InvalidatePanel(HWND hwnd)
@@ -80,6 +101,18 @@ void Layout(HWND hwnd)
     {
         state->contentHeight = state->layout(hwnd, width, height, state->scrollY);
         UpdateScrollBar(hwnd, *state, height);
+    }
+}
+
+void EnsureLayoutForHitTest(HWND hwnd, State& state)
+{
+    if (state.ensureLayout)
+    {
+        state.ensureLayout(hwnd);
+    }
+    else
+    {
+        Layout(hwnd);
     }
 }
 
@@ -130,9 +163,9 @@ void ScrollTo(HWND hwnd, int scrollY)
     RECT client{};
     GetClientRect(hwnd, &client);
     const int height = client.bottom - client.top;
-    const int maxScroll = std::max(0, state->contentHeight - std::max(0, height));
+    const int maxScroll = MaxScroll(*state, height);
     const int nextScrollY = std::clamp(scrollY, 0, maxScroll);
-    if (nextScrollY == state->scrollY && GetScrollPos(hwnd, SB_VERT) == state->scrollY)
+    if (nextScrollY == state->scrollY)
     {
         return;
     }
@@ -142,10 +175,31 @@ void ScrollTo(HWND hwnd, int scrollY)
     InvalidatePanel(hwnd);
 }
 
+void DrawScrollBar(HDC hdc, const RECT& client, const State& state)
+{
+    const int viewportHeight = client.bottom - client.top;
+    const int maxScroll = MaxScroll(state, viewportHeight);
+    if (maxScroll <= 0)
+    {
+        return;
+    }
+
+    RECT track = ScrollTrackRect(client);
+    if (track.bottom <= track.top)
+    {
+        return;
+    }
+
+    HBRUSH trackBrush = CreateSolidBrush(ThemeManager::SurfaceColor());
+    FillRect(hdc, &track, trackBrush);
+    DeleteObject(trackBrush);
+
+    RECT thumb = ScrollThumbRect(track, state, viewportHeight, maxScroll);
+    GdiUtils::FillRoundRect(hdc, thumb, ThemeManager::MutedTextColor(), ThemeManager::MutedTextColor(), ThemeManager::Scale(4));
+}
+
 void Paint(HWND hwnd)
 {
-    OutputDebugStringW(L"ContentPanel Paint\n");
-
     PAINTSTRUCT paint{};
     HDC hdc = BeginPaint(hwnd, &paint);
     RECT client{};
@@ -163,6 +217,7 @@ void Paint(HWND hwnd)
             UpdateScrollBar(hwnd, *state, client.bottom - client.top);
         }
         state->paint(hwnd, drawDc, client, state->scrollY);
+        DrawScrollBar(drawDc, client, *state);
     }
 
     buffer.Present();
@@ -201,11 +256,6 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
         }
 
-        SCROLLINFO info{};
-        info.cbSize = sizeof(info);
-        info.fMask = SIF_ALL;
-        GetScrollInfo(hwnd, SB_VERT, &info);
-
         int nextScrollY = state->scrollY;
         switch (LOWORD(wParam))
         {
@@ -216,21 +266,29 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             nextScrollY += ThemeManager::Scale(32);
             break;
         case SB_PAGEUP:
-            nextScrollY -= static_cast<int>(info.nPage);
+        {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            nextScrollY -= client.bottom - client.top;
             break;
+        }
         case SB_PAGEDOWN:
-            nextScrollY += static_cast<int>(info.nPage);
+        {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            nextScrollY += client.bottom - client.top;
             break;
-        case SB_THUMBTRACK:
-        case SB_THUMBPOSITION:
-            nextScrollY = info.nTrackPos;
-            break;
+        }
         case SB_TOP:
             nextScrollY = 0;
             break;
         case SB_BOTTOM:
-            nextScrollY = info.nMax;
+        {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            nextScrollY = state->contentHeight - (client.bottom - client.top);
             break;
+        }
         default:
             break;
         }
@@ -259,10 +317,23 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEMOVE:
     {
         State* state = GetState(hwnd);
+        if (state && state->draggingScrollThumb)
+        {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            RECT track = ScrollTrackRect(client);
+            const int maxScroll = MaxScroll(*state, client.bottom - client.top);
+            RECT thumb = ScrollThumbRect(track, *state, client.bottom - client.top, maxScroll);
+            const int trackRange = std::max<int>(1, (track.bottom - track.top) - (thumb.bottom - thumb.top));
+            const int deltaY = GET_Y_LPARAM(lParam) - state->dragStartY;
+            ScrollTo(hwnd, state->dragStartScrollY + MulDiv(deltaY, maxScroll, trackRange));
+            return 0;
+        }
         if (!state || !state->hitTestButton)
         {
             return 0;
         }
+        EnsureLayoutForHitTest(hwnd, *state);
         POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         const int hotId = state->hitTestButton(hwnd, point, state->scrollY);
         SetHotButton(hwnd, *state, hotId);
@@ -285,16 +356,49 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONDOWN:
     {
         State* state = GetState(hwnd);
+        if (!state)
+        {
+            return 0;
+        }
         if (!state || !state->hitTestButton)
         {
             return 0;
         }
+        EnsureLayoutForHitTest(hwnd, *state);
         POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        const int maxScroll = MaxScroll(*state, client.bottom - client.top);
+        if (maxScroll > 0)
+        {
+            RECT track = ScrollTrackRect(client);
+            if (PtInRect(&track, point))
+            {
+                RECT thumb = ScrollThumbRect(track, *state, client.bottom - client.top, maxScroll);
+                if (PtInRect(&thumb, point))
+                {
+                    state->draggingScrollThumb = true;
+                    state->dragStartY = point.y;
+                    state->dragStartScrollY = state->scrollY;
+                    SetCapture(hwnd);
+                }
+                else
+                {
+                    ScrollTo(hwnd, state->scrollY + (point.y < thumb.top ? -(client.bottom - client.top) : (client.bottom - client.top)));
+                }
+                return 0;
+            }
+        }
         const int id = state->hitTestButton(hwnd, point, state->scrollY);
         if (id)
         {
             SetCapture(hwnd);
             SetPressedButton(hwnd, *state, id);
+            return 0;
+        }
+        if (state->mouseDown && state->mouseDown(hwnd, point, state->scrollY))
+        {
+            SetHotButton(hwnd, *state, 0);
         }
         return 0;
     }
@@ -306,7 +410,17 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             return 0;
         }
+        if (state->draggingScrollThumb)
+        {
+            state->draggingScrollThumb = false;
+            if (GetCapture() == hwnd)
+            {
+                ReleaseCapture();
+            }
+            return 0;
+        }
         const int pressedId = state->pressedButtonId;
+        EnsureLayoutForHitTest(hwnd, *state);
         POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         const int releasedId = state->hitTestButton ? state->hitTestButton(hwnd, point, state->scrollY) : 0;
         if (GetCapture() == hwnd)
@@ -339,8 +453,50 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Paint(hwnd);
         return 0;
 
-    case WM_COMMAND:
+    case WM_RBUTTONUP:
+    {
+        State* state = GetState(hwnd);
+        if (state)
+        {
+            EnsureLayoutForHitTest(hwnd, *state);
+            if (state->rightClick)
+            {
+                POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                state->rightClick(hwnd, point, state->scrollY);
+                state->suppressNextContextMenu = true;
+                return 0;
+            }
+        }
+        return 0;
+    }
+
     case WM_CONTEXTMENU:
+    {
+        State* state = GetState(hwnd);
+        if (state)
+        {
+            EnsureLayoutForHitTest(hwnd, *state);
+            if (state->suppressNextContextMenu && lParam != -1)
+            {
+                state->suppressNextContextMenu = false;
+                return 0;
+            }
+            if (state->rightClick && lParam != -1)
+            {
+                POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                ScreenToClient(hwnd, &point);
+                state->rightClick(hwnd, point, state->scrollY);
+                return 0;
+            }
+        }
+        if (lParam == -1)
+        {
+            return SendMessageW(GetParent(hwnd), message, wParam, lParam);
+        }
+        return 0;
+    }
+
+    case WM_COMMAND:
     case WM_MEASUREITEM:
     case WM_DRAWITEM:
     case WM_CTLCOLOREDIT:
@@ -380,7 +536,7 @@ HWND Create(HWND parent, HINSTANCE instance)
         0,
         kClassName,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPSIBLINGS,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
         0,
         0,
         0,
@@ -409,6 +565,15 @@ void SetPaintCallback(HWND panel, PaintCallback callback)
     }
 }
 
+void SetEnsureLayoutCallback(HWND panel, EnsureLayoutCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->ensureLayout = callback;
+    }
+}
+
 void SetButtonHitTestCallback(HWND panel, ButtonHitTestCallback callback)
 {
     State* state = GetState(panel);
@@ -427,12 +592,30 @@ void SetButtonStateCallback(HWND panel, ButtonStateCallback callback)
     }
 }
 
+void SetMouseDownCallback(HWND panel, MouseDownCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->mouseDown = callback;
+    }
+}
+
 void SetMouseClickCallback(HWND panel, MouseClickCallback callback)
 {
     State* state = GetState(panel);
     if (state)
     {
         state->click = callback;
+    }
+}
+
+void SetRightClickCallback(HWND panel, RightClickCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->rightClick = callback;
     }
 }
 

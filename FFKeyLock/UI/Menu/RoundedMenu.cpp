@@ -18,6 +18,7 @@ namespace FFKeyLock
 namespace
 {
 constexpr wchar_t kRoundedMenuClass[] = L"FFKeyLockRoundedMenu";
+constexpr UINT_PTR kPointerDismissTimerId = 1;
 
 int ScaleForDpi(int value, UINT dpi)
 {
@@ -47,6 +48,7 @@ struct MenuState
     int openSubmenuIndex = -1;
     UINT result = 0;
     bool done = false;
+    bool activate = true;
     int width = 0;
     int height = 0;
 
@@ -78,6 +80,36 @@ bool IsRoundedMenuWindow(HWND hwnd)
     return wcscmp(className, kRoundedMenuClass) == 0;
 }
 
+bool IsMenuBarWindow(HWND hwnd)
+{
+    if (!hwnd)
+    {
+        return false;
+    }
+
+    wchar_t className[64]{};
+    GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
+    return wcscmp(className, L"FFKeyLockMenuBar") == 0;
+}
+
+bool IsPointInActiveMenu(POINT point)
+{
+    for (MenuState* menu : g_activeMenus)
+    {
+        if (!menu || !menu->hwnd)
+        {
+            continue;
+        }
+
+        RECT rect{};
+        if (GetWindowRect(menu->hwnd, &rect) && PtInRect(&rect, point))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void CloseMenu(MenuState* state, UINT result)
 {
     if (!state || state->done)
@@ -98,6 +130,26 @@ void CloseAllMenus(UINT result)
     for (MenuState* menu : menus)
     {
         CloseMenu(menu, result);
+    }
+}
+
+void CloseDescendantMenus(MenuState* state)
+{
+    if (!state)
+    {
+        return;
+    }
+
+    const auto it = std::find(g_activeMenus.begin(), g_activeMenus.end(), state);
+    if (it == g_activeMenus.end())
+    {
+        return;
+    }
+
+    std::vector<MenuState*> descendants(std::next(it), g_activeMenus.end());
+    for (MenuState* menu : descendants)
+    {
+        CloseMenu(menu, 0);
     }
 }
 
@@ -350,15 +402,42 @@ void OpenSubmenu(MenuState* state, int index)
     const auto& item = state->items[index];
     if (!IsInteractive(item) || item.submenu.empty())
     {
+        CloseDescendantMenus(state);
         state->openSubmenuIndex = -1;
         return;
     }
 
+    CloseDescendantMenus(state);
     state->openSubmenuIndex = index;
     RECT rect = state->itemRects[index];
-    POINT anchor{ rect.right - ScaleForDpi(3, state->dpi), rect.top - ScaleForDpi(4, state->dpi) };
-    ClientToScreen(state->hwnd, &anchor);
-    const UINT command = RoundedMenu::Show(state->owner, anchor, item.submenu);
+    MenuState childState{};
+    childState.owner = state->owner;
+    childState.dpi = state->dpi;
+    childState.font = state->font;
+    childState.items = item.submenu;
+    MeasureMenu(childState);
+
+    POINT parentTopLeft{ rect.left, rect.top };
+    POINT parentRight{ rect.right, rect.top };
+    ClientToScreen(state->hwnd, &parentTopLeft);
+    ClientToScreen(state->hwnd, &parentRight);
+
+    POINT anchor{ parentRight.x - ScaleForDpi(3, state->dpi), parentRight.y - ScaleForDpi(4, state->dpi) };
+    RECT ownerRect{};
+    if (GetWindowRect(state->owner, &ownerRect) && anchor.x + childState.width > ownerRect.right - ScaleForDpi(8, state->dpi))
+    {
+        anchor.x = parentTopLeft.x - childState.width + ScaleForDpi(3, state->dpi);
+    }
+
+    if (GetWindowRect(state->owner, &ownerRect))
+    {
+        anchor.y = std::clamp(
+            anchor.y,
+            ownerRect.top + ScaleForDpi(4, state->dpi),
+            std::max(ownerRect.top + ScaleForDpi(4, state->dpi), ownerRect.bottom - childState.height - ScaleForDpi(4, state->dpi)));
+    }
+
+    const UINT command = RoundedMenu::Show(state->owner, anchor, item.submenu, false, state->activate);
     state->openSubmenuIndex = -1;
     if (command)
     {
@@ -434,6 +513,11 @@ LRESULT CALLBACK RoundedMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
                 {
                     OpenSubmenu(state, nextHot);
                 }
+                else
+                {
+                    CloseDescendantMenus(state);
+                    state->openSubmenuIndex = -1;
+                }
             }
         }
         return 0;
@@ -494,6 +578,27 @@ LRESULT CALLBACK RoundedMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
         }
         break;
 
+    case WM_TIMER:
+        if (state && wParam == kPointerDismissTimerId)
+        {
+            const SHORT buttons =
+                GetAsyncKeyState(VK_LBUTTON) |
+                GetAsyncKeyState(VK_RBUTTON) |
+                GetAsyncKeyState(VK_MBUTTON);
+            if ((buttons & 0x8000) != 0)
+            {
+                POINT point{};
+                GetCursorPos(&point);
+                HWND pointWindow = WindowFromPoint(point);
+                if (!IsPointInActiveMenu(point) && !IsMenuBarWindow(pointWindow))
+                {
+                    CloseAllMenus(0);
+                }
+            }
+            return 0;
+        }
+        break;
+
     case WM_KILLFOCUS:
         if (state && !IsRoundedMenuWindow(reinterpret_cast<HWND>(wParam)))
         {
@@ -511,6 +616,7 @@ LRESULT CALLBACK RoundedMenuProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
     case WM_DESTROY:
         if (state)
         {
+            KillTimer(hwnd, kPointerDismissTimerId);
             state->hwnd = nullptr;
         }
         return 0;
@@ -565,7 +671,7 @@ POINT FitToWorkArea(POINT anchor, const MenuState& state, bool alignBottom)
 }
 }
 
-UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBottom)
+UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBottom, bool activate)
 {
     if (!owner || items.empty())
     {
@@ -577,6 +683,7 @@ UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuIt
     state->dpi = GetDpiForWindow(owner);
     state->font = CreateMenuFont(state->dpi);
     state->items = items;
+    state->activate = activate;
     MeasureMenu(*state);
 
     for (size_t i = 0; i < state->items.size(); ++i)
@@ -591,7 +698,7 @@ UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuIt
     EnsureClass(reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE)));
     POINT point = FitToWorkArea(anchor, *state, alignBottom);
     HWND hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | (activate ? 0 : WS_EX_NOACTIVATE),
         kRoundedMenuClass,
         L"",
         WS_POPUP,
@@ -614,8 +721,15 @@ UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuIt
     RegisterActiveMenu(state.get());
     ApplyRoundedRegion(hwnd, *state);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    SetForegroundWindow(hwnd);
-    SetFocus(hwnd);
+    if (activate)
+    {
+        SetForegroundWindow(hwnd);
+        SetFocus(hwnd);
+    }
+    else
+    {
+        SetTimer(hwnd, kPointerDismissTimerId, 50, nullptr);
+    }
 
     MSG msg{};
     while (!state->done && GetMessageW(&msg, nullptr, 0, 0))
@@ -631,12 +745,14 @@ UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuIt
             msg.message == WM_MOUSEHWHEEL;
         if (pointerDismiss)
         {
-            if (state->hwnd && msg.hwnd != state->hwnd && !IsChild(state->hwnd, msg.hwnd) && !IsRoundedMenuWindow(msg.hwnd))
+            const bool insideMenu = state->hwnd && (msg.hwnd == state->hwnd || IsChild(state->hwnd, msg.hwnd) || IsRoundedMenuWindow(msg.hwnd));
+            const bool onMenuBar = IsMenuBarWindow(msg.hwnd);
+            if (!insideMenu && !onMenuBar)
             {
                 CloseAllMenus(0);
             }
         }
-        if (msg.message == WM_ACTIVATEAPP && !msg.wParam)
+        if (state->activate && msg.message == WM_ACTIVATEAPP && !msg.wParam)
         {
             CloseAllMenus(0);
         }
@@ -654,12 +770,17 @@ UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuIt
     return result;
 }
 
-void RoundedMenu::ShowAndDispatch(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBottom)
+void RoundedMenu::ShowAndDispatch(HWND owner, POINT anchor, const std::vector<RoundedMenuItem>& items, bool alignBottom, bool activate)
 {
-    const UINT command = Show(owner, anchor, items, alignBottom);
+    const UINT command = Show(owner, anchor, items, alignBottom, activate);
     if (command)
     {
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     }
+}
+
+void RoundedMenu::CloseAll(UINT result)
+{
+    CloseAllMenus(result);
 }
 }

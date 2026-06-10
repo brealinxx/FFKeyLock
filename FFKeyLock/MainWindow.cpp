@@ -5,6 +5,7 @@
 #include "GameProtection.h"
 #include "InputLanguage.h"
 #include "Localization.h"
+#include "Logger.h"
 #include "OverlayNotificationManager.h"
 #include "Platform/GdiUtils.h"
 #include "Resource.h"
@@ -40,6 +41,9 @@ HWND g_featureGroup = nullptr;
 HWND g_inputGroup = nullptr;
 HWND g_programsGroup = nullptr;
 std::vector<RECT> g_menuBarItems;
+int g_menuBarHotIndex = -1;
+int g_menuBarOpenIndex = -1;
+bool g_menuBarMouseTracking = false;
 int g_scrollY = 0;
 int g_contentHeight = 0;
 
@@ -106,6 +110,16 @@ void InvalidateWindowAndChildren(HWND hwnd)
     RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
+void InvalidateMenuBarItem(int index)
+{
+    if (!g_menuBar || index < 0 || index >= static_cast<int>(g_menuBarItems.size()))
+    {
+        return;
+    }
+
+    InvalidateRect(g_menuBar, &g_menuBarItems[index], FALSE);
+}
+
 void SetDefaultFont(HWND control)
 {
     SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
@@ -160,6 +174,9 @@ void RefreshProtectedBrowserList();
 int LayoutContentControls(HWND panel, int width, int height, int scrollY);
 void ClampGameListSelection();
 int HitTestGameListItem(POINT point, int scrollY);
+void EnsureContentLayoutForHitTest(int scrollY);
+void EnsureContentLayoutForHitTest();
+void InvalidateGameListItem(HWND panel, int index, int scrollY);
 
 RoundedMenuItem MenuItem(UINT id, const std::wstring& text, const std::wstring& shortcut = L"", bool checked = false, bool enabled = true)
 {
@@ -206,15 +223,25 @@ std::vector<RoundedMenuItem> BuildThemeMenu()
     };
 }
 
+std::vector<RoundedMenuItem> BuildLanguageMenu()
+{
+    return {
+        MenuItem(IDM_LANGUAGE_CHINESE, Text(L"中文", L"Chinese"), L"", g_language == UiLanguage::Chinese),
+        MenuItem(IDM_LANGUAGE_ENGLISH, Text(L"英文", L"English"), L"", g_language == UiLanguage::English),
+    };
+}
+
 std::vector<RoundedMenuItem> BuildSettingsMenu()
 {
     return {
+        MenuSubmenu(Text(L"语言", L"Language"), BuildLanguageMenu()),
         MenuSubmenu(Text(L"主题", L"Theme"), BuildThemeMenu()),
         MenuItem(IDM_OPEN_CONFIG_DIR, Text(L"打开配置目录", L"Open config directory")),
         MenuItem(IDM_OPEN_LOG_DIR, Text(L"打开日志目录", L"Open log directory")),
         MenuItem(IDM_STARTUP, Text(L"开机启动", L"Startup"), L"", IsStartupEnabled()),
         MenuSeparator(),
         MenuItem(IDM_RESET_CONFIG, Text(L"重置配置", L"Reset config")),
+        MenuItem(IDM_CLEAR_LOCAL_DATA, Text(L"删除本地数据及注册表", L"Delete local data and registry")),
         MenuSeparator(),
         MenuItem(IDM_EXIT, Text(L"退出", L"Exit"), L"Alt+F4"),
     };
@@ -260,6 +287,8 @@ std::vector<RoundedMenuItem> BuildGameListContextMenu()
     return {
         MenuItem(IDM_COPY_GAME_NAME, Text(L"复制名称", L"Copy name"), L"Ctrl+C"),
         MenuItem(IDM_OPEN_GAME_FOLDER, Text(L"跳转到该程序文件夹", L"Open program folder")),
+        MenuSeparator(),
+        MenuItem(IDM_DELETE_SELECTED_GAME, Text(L"删除选中", L"Delete selected")),
     };
 }
 
@@ -279,7 +308,14 @@ void OpenConfigDirectory()
 
 void OpenLogDirectory()
 {
-    OpenConfigDirectory();
+    const std::wstring logDirectory = GetLogDirectory();
+    if (!logDirectory.empty())
+    {
+        Log(LogLevel::Info, L"Opening log directory: " + logDirectory);
+        std::error_code ignored;
+        std::filesystem::create_directories(logDirectory, ignored);
+        OpenFolderPath(logDirectory);
+    }
 }
 
 void ShowMenuBarPopup(int index)
@@ -288,14 +324,15 @@ void ShowMenuBarPopup(int index)
     {
         return;
     }
+    if (g_menuBarOpenIndex == index)
+    {
+        return;
+    }
 
     std::vector<RoundedMenuItem> items;
     if (index == 0)
     {
         items = BuildSettingsMenu();
-        items.insert(items.begin(), MenuSeparator());
-        items.insert(items.begin(), MenuItem(IDM_SWITCH_ENGLISH, Text(L"切换为英文", L"Switch to English")));
-        items.insert(items.begin(), MenuItem(IDM_SWITCH_CHINESE, Text(L"切换为中文", L"Switch to Chinese")));
     }
     else if (index == 1)
     {
@@ -308,8 +345,17 @@ void ShowMenuBarPopup(int index)
 
     POINT anchor{ g_menuBarItems[index].left, g_menuBarItems[index].bottom };
     ClientToScreen(g_menuBar, &anchor);
-    RoundedMenu::ShowAndDispatch(g_hWnd, anchor, items);
-    InvalidateWindow(g_menuBar);
+    const int oldOpenIndex = g_menuBarOpenIndex;
+    RoundedMenu::CloseAll();
+    g_menuBarOpenIndex = index;
+    InvalidateMenuBarItem(oldOpenIndex);
+    InvalidateMenuBarItem(index);
+    RoundedMenu::ShowAndDispatch(g_hWnd, anchor, items, false, false);
+    if (g_menuBarOpenIndex == index)
+    {
+        g_menuBarOpenIndex = -1;
+        InvalidateMenuBarItem(index);
+    }
 }
 
 int HitTestMenuBarItem(POINT point)
@@ -354,16 +400,14 @@ void PaintMenuBar(HWND hwnd)
     HGDIOBJ oldFont = SelectObject(drawDc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
     g_menuBarItems.clear();
     int x = Scale(8);
-    POINT cursor{};
-    GetCursorPos(&cursor);
-    ScreenToClient(hwnd, &cursor);
     for (const auto* label : labels)
     {
         SIZE size{};
         GetTextExtentPoint32W(drawDc, label, static_cast<int>(wcslen(label)), &size);
         RECT rect{ x, Scale(3), x + size.cx + Scale(24), client.bottom - Scale(3) };
         g_menuBarItems.push_back(rect);
-        if (PtInRect(&rect, cursor))
+        if (static_cast<int>(g_menuBarItems.size()) - 1 == g_menuBarHotIndex ||
+            static_cast<int>(g_menuBarItems.size()) - 1 == g_menuBarOpenIndex)
         {
             HBRUSH hover = CreateSolidBrush(ThemeManager::MenuBarHoverColor());
             FillRect(drawDc, &rect, hover);
@@ -397,12 +441,49 @@ LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     }
 
     case WM_MOUSEMOVE:
-        InvalidateWindow(hwnd);
+    {
+        if (!g_menuBarMouseTracking)
+        {
+            TRACKMOUSEEVENT track{};
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = hwnd;
+            g_menuBarMouseTracking = TrackMouseEvent(&track) != FALSE;
+        }
+
+        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        const int nextHot = HitTestMenuBarItem(point);
+        if (g_menuBarHotIndex != nextHot)
+        {
+            const int oldHot = g_menuBarHotIndex;
+            g_menuBarHotIndex = nextHot;
+            if (oldHot >= 0 && oldHot < static_cast<int>(g_menuBarItems.size()))
+            {
+                InvalidateRect(hwnd, &g_menuBarItems[oldHot], FALSE);
+            }
+            if (nextHot >= 0 && nextHot < static_cast<int>(g_menuBarItems.size()))
+            {
+                InvalidateRect(hwnd, &g_menuBarItems[nextHot], FALSE);
+            }
+        }
+        if (nextHot >= 0)
+        {
+            ShowMenuBarPopup(nextHot);
+        }
         return 0;
+    }
 
     case WM_MOUSELEAVE:
-        InvalidateWindow(hwnd);
+    {
+        g_menuBarMouseTracking = false;
+        const int oldHot = g_menuBarHotIndex;
+        g_menuBarHotIndex = -1;
+        if (oldHot >= 0 && oldHot < static_cast<int>(g_menuBarItems.size()))
+        {
+            InvalidateRect(hwnd, &g_menuBarItems[oldHot], FALSE);
+        }
         return 0;
+    }
 
     case WM_LBUTTONUP:
     {
@@ -568,6 +649,21 @@ void DrawPanelText(HDC hdc, const std::wstring& text, RECT rect, COLORREF color,
     DrawTextW(hdc, text.c_str(), -1, &rect, format);
 }
 
+int MeasureUiTextWidth(HWND hwnd, const std::wstring& text)
+{
+    HDC hdc = GetDC(hwnd);
+    if (!hdc)
+    {
+        return Scale(120);
+    }
+
+    GdiUtils::SelectObjectScope fontScope(hdc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
+    SIZE size{};
+    GetTextExtentPoint32W(hdc, text.c_str(), static_cast<int>(text.size()), &size);
+    ReleaseDC(hwnd, hdc);
+    return size.cx;
+}
+
 UiButton* FindContentButton(int id)
 {
     auto it = std::find_if(g_contentButtons.begin(), g_contentButtons.end(), [id](const UiButton& button) {
@@ -617,6 +713,10 @@ void DrawCard(HDC hdc, const RECT& logicalRect, int scrollY, const std::wstring&
 {
     RECT rect = VisualRect(logicalRect, scrollY);
     GdiUtils::FillRoundRect(hdc, rect, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(8));
+    if (title.empty())
+    {
+        return;
+    }
     RECT titleRect = rect;
     titleRect.left += Scale(16);
     titleRect.right -= Scale(16);
@@ -625,10 +725,10 @@ void DrawCard(HDC hdc, const RECT& logicalRect, int scrollY, const std::wstring&
     DrawPanelText(hdc, title, titleRect, ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-void DrawFeatureRow(HDC hdc, int scrollY, int labelX, int stateX, int y, const std::wstring& label, const std::wstring& value)
+void DrawFeatureRow(HDC hdc, int scrollY, int labelX, int labelWidth, int stateX, int stateWidth, int y, const std::wstring& label, const std::wstring& value)
 {
-    RECT labelRect{ labelX, y, labelX + Scale(150), y + Scale(24) };
-    RECT stateRect{ stateX, y, stateX + Scale(76), y + Scale(24) };
+    RECT labelRect{ labelX, y, labelX + labelWidth, y + Scale(24) };
+    RECT stateRect{ stateX, y, stateX + stateWidth, y + Scale(24) };
     DrawPanelText(hdc, label, VisualRect(labelRect, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, value, VisualRect(stateRect, scrollY), ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
@@ -756,30 +856,10 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
 {
     UNREFERENCED_PARAMETER(panel);
 
-    wchar_t debugMessage[256]{};
-    StringCchPrintfW(
-        debugMessage,
-        std::size(debugMessage),
-        L"PaintContentPanel contentHeight=%d buttons=%zu statusCard={%ld,%ld,%ld,%ld}\n",
-        g_contentLayout.contentHeight,
-        g_contentButtons.size(),
-        g_contentLayout.statusCard.left,
-        g_contentLayout.statusCard.top,
-        g_contentLayout.statusCard.right,
-        g_contentLayout.statusCard.bottom);
-    OutputDebugStringW(L"PaintContentPanel\n");
-    OutputDebugStringW(debugMessage);
-
     HRGN clipRegion = CreateRectRgn(client.left, client.top, client.right, client.bottom);
     SelectClipRgn(hdc, clipRegion);
     DeleteObject(clipRegion);
 
-    HICON icon = LoadIconW(g_hInst, MAKEINTRESOURCEW(IDI_FFKEYLOCK));
-    RECT iconRect = VisualRect(g_contentLayout.icon, scrollY);
-    if (icon)
-    {
-        DrawIconEx(hdc, iconRect.left, iconRect.top, icon, iconRect.right - iconRect.left, iconRect.bottom - iconRect.top, 0, nullptr, DI_NORMAL);
-    }
     DrawPanelText(hdc, L"FFKeyLock", VisualRect(g_contentLayout.title, scrollY), ThemeManager::TextColor(), ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, Text(L"游戏防误触助手", L"Game mis-touch protection assistant"), VisualRect(g_contentLayout.subtitle, scrollY),
         ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -788,7 +868,8 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
     const bool canShowDetectedGame = g_protectionEnabled && g_autoDetectEnabled && !g_currentDetectedGameName.empty();
     const std::wstring detectedGame = canShowDetectedGame ? g_currentDetectedGameName : Text(L"无", L"None");
     const std::wstring inputLanguage = CurrentInputLanguageText();
-    DrawPanelText(hdc, BuildPrimaryStatusText(), VisualRect(g_contentLayout.primaryStatus, scrollY), ThemeManager::AccentColor(), ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const COLORREF primaryStatusColor = g_inGameProtection ? RGB(84, 190, 120) : ThemeManager::AccentColor();
+    DrawPanelText(hdc, BuildPrimaryStatusText(), VisualRect(g_contentLayout.primaryStatus, scrollY), primaryStatusColor, ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, StatusLine(L"当前检测到：", L"Detected: ", detectedGame), VisualRect(g_contentLayout.detectedStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, StatusLine(L"输入法状态：", L"Input language: ", inputLanguage), VisualRect(g_contentLayout.inputStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, StatusLine(L"Win 键锁定：", L"Win key lock: ", EnabledText(g_windowsKeyGuardEnabled)), VisualRect(g_contentLayout.winKeyStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -797,16 +878,36 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
     const int margin = Scale(24);
     const int contentWidth = g_contentLayout.featureCard.right - g_contentLayout.featureCard.left;
     const int groupInnerLeft = margin + Scale(20);
-    const int switchStateX = margin + Scale(160);
-    const int secondColX = margin + std::max(Scale(430), contentWidth / 2 + Scale(16));
-    const int secondStateX = secondColX + Scale(132);
-    DrawFeatureRow(hdc, scrollY, groupInnerLeft, switchStateX, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
-    DrawFeatureRow(hdc, scrollY, groupInnerLeft, switchStateX, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
-    DrawFeatureRow(hdc, scrollY, secondColX, secondStateX, g_contentLayout.featureCard.top + Scale(34), Text(L"开机启动", L"Startup"), EnabledText(IsStartupEnabled()));
-    DrawFeatureRow(hdc, scrollY, secondColX, secondStateX, g_contentLayout.featureCard.top + Scale(78), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
+    const int groupRight = margin + contentWidth;
+    const int innerRight = groupRight - Scale(20);
+    const int switchButtonWidth = Scale(92);
+    const int featureLabelWidth = Scale(118);
+    const int featureStateWidth = Scale(54);
+    const int featureInlineGap = Scale(8);
+    const int featureGroupWidth = featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap + switchButtonWidth;
+    const bool twoColumnFeatures = contentWidth >= Scale(680);
+    if (twoColumnFeatures)
+    {
+        const int firstGroupX = groupInnerLeft;
+        const int secondGroupX = innerRight - featureGroupWidth;
+        const int firstStateX = firstGroupX + featureLabelWidth + featureInlineGap;
+        const int secondStateX = secondGroupX + featureLabelWidth + featureInlineGap;
+        DrawFeatureRow(hdc, scrollY, firstGroupX, featureLabelWidth, firstStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
+        DrawFeatureRow(hdc, scrollY, firstGroupX, featureLabelWidth, firstStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
+        DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"开机启动", L"Startup"), EnabledText(IsStartupEnabled()));
+        DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
+    }
+    else
+    {
+        const int groupX = std::min(groupInnerLeft, innerRight - featureGroupWidth);
+        const int stateX = groupX + featureLabelWidth + featureInlineGap;
+        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
+        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
+        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(122), Text(L"开机启动", L"Startup"), EnabledText(IsStartupEnabled()));
+        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(166), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
+    }
 
-    DrawCard(hdc, g_contentLayout.programsCard, scrollY, Text(L"受保护程序", L"Protected programs"));
-    DrawPanelText(hdc, Text(L"程序列表", L"Program list"), VisualRect(g_contentLayout.programLabel, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawCard(hdc, g_contentLayout.programsCard, scrollY, Text(L"受保护程序列表", L"Protected program list"));
 
     DrawProgramList(hdc, scrollY);
 
@@ -858,15 +959,100 @@ int HitTestGameListItem(POINT point, int scrollY)
     return index >= 0 && index < static_cast<int>(g_gameExeNames.size()) ? index : -1;
 }
 
+void EnsureContentLayoutForHitTest(int scrollY)
+{
+    if (!g_contentPanel)
+    {
+        return;
+    }
+
+    RECT client{};
+    GetClientRect(g_contentPanel, &client);
+    if (client.right <= client.left || client.bottom <= client.top)
+    {
+        return;
+    }
+
+    LayoutContentControls(g_contentPanel, client.right - client.left, client.bottom - client.top, scrollY);
+}
+
+void EnsureContentLayoutForHitTest()
+{
+    EnsureContentLayoutForHitTest(g_scrollY);
+}
+
+void EnsureContentPanelLayoutForHitTest(HWND panel)
+{
+    EnsureContentLayoutForHitTest(ContentPanel::ScrollY(panel));
+}
+
+bool SelectGameListItem(HWND panel, int index, int scrollY)
+{
+    if (index < 0 || index >= static_cast<int>(g_gameExeNames.size()))
+    {
+        return false;
+    }
+
+    if (index == g_selectedGameIndex)
+    {
+        return true;
+    }
+
+    const int oldIndex = g_selectedGameIndex;
+    g_selectedGameIndex = index;
+    ClampGameListSelection();
+    InvalidateGameListItem(panel, oldIndex, scrollY);
+    InvalidateGameListItem(panel, g_selectedGameIndex, scrollY);
+    return true;
+}
+
+void InvalidateGameListItem(HWND panel, int index, int scrollY)
+{
+    if (!panel || index < 0 || index < g_gameListTopIndex)
+    {
+        return;
+    }
+
+    const int row = index - g_gameListTopIndex;
+    if (row < 0 || row >= GameListVisibleRows())
+    {
+        return;
+    }
+
+    RECT rect = VisualRect(g_contentLayout.listRect, scrollY);
+    rect.top += row * Scale(28);
+    rect.bottom = rect.top + Scale(28);
+    InvalidateRect(panel, &rect, FALSE);
+}
+
 void ContentPanelClicked(HWND panel, POINT point, int scrollY)
 {
+    EnsureContentLayoutForHitTest(scrollY);
     const int index = HitTestGameListItem(point, scrollY);
-    if (index >= 0)
+    SelectGameListItem(panel, index, scrollY);
+}
+
+bool ContentPanelMouseDown(HWND panel, POINT point, int scrollY)
+{
+    EnsureContentLayoutForHitTest(scrollY);
+    const int index = HitTestGameListItem(point, scrollY);
+    return SelectGameListItem(panel, index, scrollY);
+}
+
+void ContentPanelRightClicked(HWND panel, POINT clientPoint, int scrollY)
+{
+    EnsureContentLayoutForHitTest(scrollY);
+    const int index = HitTestGameListItem(clientPoint, scrollY);
+    if (index < 0)
     {
-        g_selectedGameIndex = index;
-        ClampGameListSelection();
-        InvalidateWindow(panel);
+        return;
     }
+
+    SelectGameListItem(panel, index, scrollY);
+
+    POINT screenPoint = clientPoint;
+    ClientToScreen(panel, &screenPoint);
+    RoundedMenu::ShowAndDispatch(g_hWnd, screenPoint, BuildGameListContextMenu());
 }
 
 bool ContentPanelWheel(HWND, POINT point, int scrollY, int delta)
@@ -913,7 +1099,7 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         const int groupSpacing = Scale(18);
         const int buttonHeight = Scale(32);
         const int buttonGap = Scale(10);
-        const int switchButtonWidth = Scale(104);
+        const int switchButtonWidth = Scale(92);
         const int actionButtonWidth = Scale(130);
         const int contentWidth = std::max(Scale(320), width - margin * 2);
         const bool twoColumnFeatures = contentWidth >= Scale(680);
@@ -932,9 +1118,16 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
 
         const int groupInnerLeft = margin + Scale(20);
         const int groupRight = margin + contentWidth;
-        const int switchButtonX = margin + Scale(254);
-        const int secondColX = margin + std::max(Scale(430), contentWidth / 2 + Scale(16));
-        const int secondButtonX = groupRight - Scale(20) - switchButtonWidth;
+        const int innerRight = groupRight - Scale(20);
+        const int switchButtonX = innerRight - switchButtonWidth;
+        const int featureLabelWidth = Scale(118);
+        const int featureStateWidth = Scale(54);
+        const int featureInlineGap = Scale(8);
+        const int featureGroupWidth = featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap + switchButtonWidth;
+        const int firstGroupX = twoColumnFeatures ? groupInnerLeft : std::min(groupInnerLeft, innerRight - featureGroupWidth);
+        const int secondGroupX = innerRight - featureGroupWidth;
+        const int firstButtonX = firstGroupX + featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap;
+        const int secondButtonX = secondGroupX + featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap;
         const int listX = groupInnerLeft;
         const int listY = programsY + Scale(52);
         const int actionButtonX = wideProgramActions ? groupRight - Scale(20) - actionButtonWidth : listX;
@@ -944,10 +1137,15 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         const int listHeight = wideProgramActions ? std::max(Scale(128), programsHeight - Scale(74)) : Scale(160);
         const int actionButtonY = wideProgramActions ? listY : listY + listHeight + Scale(14);
         const int narrowActionWidth = std::max(Scale(120), (listWidth - buttonGap) / 2);
+        const int programsTitleX = margin + Scale(16);
+        const int programsTitleWidth = MeasureUiTextWidth(panel, Text(L"受保护程序列表", L"Protected program list"));
+        const int programsHelpX = std::min(
+            programsTitleX + programsTitleWidth + Scale(4),
+            groupRight - Scale(20) - Scale(28));
 
-        g_contentLayout.icon = RECT{ margin, headerY + Scale(10), margin + Scale(48), headerY + Scale(58) };
-        g_contentLayout.title = RECT{ margin + Scale(64), headerY + Scale(8), groupRight, headerY + Scale(38) };
-        g_contentLayout.subtitle = RECT{ margin + Scale(64), headerY + Scale(42), groupRight, headerY + Scale(64) };
+        g_contentLayout.icon = RECT{};
+        g_contentLayout.title = RECT{ margin, headerY + Scale(8), groupRight, headerY + Scale(38) };
+        g_contentLayout.subtitle = RECT{ margin, headerY + Scale(42), groupRight, headerY + Scale(64) };
         g_contentLayout.statusCard = RECT{ margin, statusY, margin + contentWidth, statusY + statusHeight };
         g_contentLayout.primaryStatus = RECT{ groupInnerLeft, statusY + Scale(30), groupInnerLeft + Scale(320), statusY + Scale(60) };
         g_contentLayout.detectedStatus = RECT{ groupInnerLeft, statusY + Scale(68), groupRight - Scale(20), statusY + Scale(92) };
@@ -955,13 +1153,13 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         g_contentLayout.winKeyStatus = RECT{ groupInnerLeft, statusY + Scale(124), groupRight - Scale(20), statusY + Scale(148) };
         g_contentLayout.featureCard = RECT{ margin, featureY, margin + contentWidth, featureY + featureHeight };
         g_contentLayout.programsCard = RECT{ margin, programsY, margin + contentWidth, programsY + programsHeight };
-        g_contentLayout.programLabel = RECT{ listX, programsY + Scale(28), listX + Scale(110), programsY + Scale(52) };
+        g_contentLayout.programLabel = RECT{ programsTitleX, programsY + Scale(10), programsHelpX, programsY + Scale(34) };
         g_contentLayout.listRect = RECT{ listX, listY, listX + listWidth, listY + listHeight };
         g_contentLayout.contentHeight = g_contentHeight;
 
         g_contentButtons.clear();
-        AddContentButton(IDC_PROTECTION_BUTTON, RECT{ switchButtonX, featureY + Scale(28), switchButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled));
-        AddContentButton(IDC_AUTO_DETECT_BUTTON, RECT{ switchButtonX, featureY + Scale(72), switchButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_autoDetectEnabled));
+        AddContentButton(IDC_PROTECTION_BUTTON, RECT{ firstButtonX, featureY + Scale(28), firstButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled));
+        AddContentButton(IDC_AUTO_DETECT_BUTTON, RECT{ firstButtonX, featureY + Scale(72), firstButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_autoDetectEnabled));
         if (twoColumnFeatures)
         {
             AddContentButton(IDC_STARTUP_BUTTON, RECT{ secondButtonX, featureY + Scale(28), secondButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
@@ -969,10 +1167,10 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         }
         else
         {
-            AddContentButton(IDC_STARTUP_BUTTON, RECT{ switchButtonX, featureY + Scale(116), switchButtonX + switchButtonWidth, featureY + Scale(116) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
-            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ switchButtonX, featureY + Scale(160), switchButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
+            AddContentButton(IDC_STARTUP_BUTTON, RECT{ firstButtonX, featureY + Scale(116), firstButtonX + switchButtonWidth, featureY + Scale(116) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
+            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ firstButtonX, featureY + Scale(160), firstButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
         }
-        AddContentButton(IDC_GAME_LIST_HELP, RECT{ listX + Scale(110), programsY + Scale(24), listX + Scale(138), programsY + Scale(52) }, L"?");
+        AddContentButton(IDC_GAME_LIST_HELP, RECT{ programsHelpX, programsY + Scale(8), programsHelpX + Scale(28), programsY + Scale(36) }, L"?");
         AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加程序", L"Add program"));
         AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ actionButtonX, listY + Scale(42), actionButtonX + actionButtonWidth, listY + Scale(42) + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
         AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + Scale(84), actionButtonX + actionButtonWidth, listY + Scale(84) + buttonHeight }, Text(L"从文件选择", L"Choose file"));
@@ -1325,42 +1523,25 @@ void ShowProtectedListHelp()
 
 void ShowGameListContextMenu(LPARAM lParam)
 {
-    POINT point{};
-    if (lParam == -1)
+    if (lParam != -1)
     {
-        if (g_selectedGameIndex < 0)
-        {
-            return;
-        }
-        RECT selectedRect = VisualRect(g_contentLayout.listRect, g_scrollY);
-        if (g_selectedGameIndex >= 0)
-        {
-            const int row = g_selectedGameIndex - g_gameListTopIndex;
-            selectedRect.top += row * Scale(28);
-            selectedRect.bottom = selectedRect.top + Scale(28);
-        }
-        point.x = selectedRect.left + Scale(16);
-        point.y = selectedRect.top + Scale(14);
-        ClientToScreen(g_contentPanel, &point);
+        return;
     }
-    else
+
+    const int scrollY = ContentPanel::ScrollY(g_contentPanel);
+    EnsureContentLayoutForHitTest(scrollY);
+    if (g_selectedGameIndex < 0)
     {
-        point.x = GET_X_LPARAM(lParam);
-        point.y = GET_Y_LPARAM(lParam);
-        POINT clientPoint = point;
-        ScreenToClient(g_contentPanel, &clientPoint);
-        const int index = HitTestGameListItem(clientPoint, g_scrollY);
-        if (index < 0)
-        {
-            return;
-        }
-        else
-        {
-            g_selectedGameIndex = index;
-            ClampGameListSelection();
-            InvalidateWindow(g_contentPanel);
-        }
+        return;
     }
+
+    RECT selectedRect = VisualRect(g_contentLayout.listRect, scrollY);
+    const int row = g_selectedGameIndex - g_gameListTopIndex;
+    selectedRect.top += row * Scale(28);
+    selectedRect.bottom = selectedRect.top + Scale(28);
+
+    POINT point{ selectedRect.left + Scale(16), selectedRect.top + Scale(14) };
+    ClientToScreen(g_contentPanel, &point);
 
     if (GetSelectedGameName().empty())
     {
@@ -1410,9 +1591,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         g_contentPanel = ContentPanel::Create(hWnd, g_hInst);
         ContentPanel::SetLayoutCallback(g_contentPanel, LayoutContentControls);
         ContentPanel::SetPaintCallback(g_contentPanel, PaintContentPanel);
+        ContentPanel::SetEnsureLayoutCallback(g_contentPanel, EnsureContentPanelLayoutForHitTest);
         ContentPanel::SetButtonHitTestCallback(g_contentPanel, HitTestContentPanelButton);
         ContentPanel::SetButtonStateCallback(g_contentPanel, SetContentButtonState);
+        ContentPanel::SetMouseDownCallback(g_contentPanel, ContentPanelMouseDown);
         ContentPanel::SetMouseClickCallback(g_contentPanel, ContentPanelClicked);
+        ContentPanel::SetRightClickCallback(g_contentPanel, ContentPanelRightClicked);
         ContentPanel::SetMouseWheelCallback(g_contentPanel, ContentPanelWheel);
         AddTrayIcon();
         CreateMainControls();
@@ -1421,6 +1605,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             GetClientRect(hWnd, &client);
             ResizeMainControls(client.right - client.left, client.bottom - client.top);
         }
+        ContentPanel::Relayout(g_contentPanel);
         ThemeManager::ApplyTheme(hWnd);
         SetTimer(hWnd, TIMER_GAME_DETECT, DETECT_INTERVAL_MS, nullptr);
         return 0;
@@ -1435,6 +1620,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_SIZE:
         ResizeMainControls(LOWORD(lParam), HIWORD(lParam));
         InvalidateRect(hWnd, nullptr, TRUE);
+        return 0;
+
+    case WM_SHOWWINDOW:
+        if (wParam && g_contentPanel)
+        {
+            RECT client{};
+            GetClientRect(hWnd, &client);
+            ResizeMainControls(client.right - client.left, client.bottom - client.top);
+            ContentPanel::Relayout(g_contentPanel);
+            InvalidateRect(g_contentPanel, nullptr, TRUE);
+        }
         return 0;
 
     case WM_MOUSEWHEEL:
@@ -1540,7 +1736,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_CONTEXTMENU:
-        if (reinterpret_cast<HWND>(wParam) == g_contentPanel)
+        if (reinterpret_cast<HWND>(wParam) == g_contentPanel && lParam == -1)
         {
             ShowGameListContextMenu(lParam);
             return 0;
@@ -1593,6 +1789,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 LeaveGameProtection();
                 SaveConfig();
                 UpdateMainWindow();
+            }
+            return 0;
+
+        case IDM_CLEAR_LOCAL_DATA:
+            if (MessageBoxW(hWnd,
+                Text(L"确定要删除 FFKeyLock 的本地配置、日志、开机启动项和通知快捷方式吗？\n\n操作完成后程序将退出。", L"Delete FFKeyLock local configuration, logs, startup entry, and notification shortcut?\n\nThe app will exit after cleanup."),
+                Text(L"删除本地数据及注册表", L"Delete local data and registry"),
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES)
+            {
+                Log(LogLevel::Warning, L"User confirmed local data and registry cleanup.");
+                LeaveGameProtection();
+                DisableWindowsKeyGuard();
+                RemoveTrayIcon();
+                const bool cleaned = ClearLocalDataAndRegistry();
+                MessageBoxW(hWnd,
+                    cleaned
+                        ? Text(L"本地数据及注册表项已删除。", L"Local data and registry entries have been deleted.")
+                        : Text(L"清理已执行，但部分文件可能仍被占用。请退出后手动检查。", L"Cleanup ran, but some files may still be in use. Please check manually after exit."),
+                    L"FFKeyLock",
+                    cleaned ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
+                DestroyWindow(hWnd);
             }
             return 0;
 
@@ -1768,12 +1985,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case IDM_EXIT:
+            RoundedMenu::CloseAll();
+            g_menuBarOpenIndex = -1;
             DestroyWindow(hWnd);
             return 0;
         }
         break;
 
     case WM_CLOSE:
+        RoundedMenu::CloseAll();
+        g_menuBarOpenIndex = -1;
+        InvalidateWindow(g_menuBar);
         ShowWindow(hWnd, SW_HIDE);
         ShowTrayNotification(L"FFKeyLock", Text(L"窗口已隐藏，程序仍在托盘运行。", L"The window is hidden. FFKeyLock is still running in the tray."));
         return 0;
@@ -2025,8 +2247,7 @@ void ShowTrayMenu()
 
     POINT roundedPoint{};
     GetCursorPos(&roundedPoint);
-    SetForegroundWindow(g_hWnd);
-    RoundedMenu::ShowAndDispatch(g_hWnd, roundedPoint, BuildTrayMenu(), true);
+    RoundedMenu::ShowAndDispatch(g_hWnd, roundedPoint, BuildTrayMenu(), true, false);
 }
 
 ATOM RegisterMainWindowClass(HINSTANCE hInstance)

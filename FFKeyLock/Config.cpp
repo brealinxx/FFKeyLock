@@ -2,6 +2,7 @@
 
 #include "AppState.h"
 #include "Localization.h"
+#include "Logger.h"
 #include "StringUtils.h"
 
 #include <shlobj.h>
@@ -15,26 +16,28 @@ namespace FFKeyLock
 {
 namespace
 {
-std::wstring GetConfigPath()
+std::wstring GetStartMenuShortcutPath()
 {
-    PWSTR appData = nullptr;
+    PWSTR startMenu = nullptr;
     std::wstring path;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_CREATE, nullptr, &appData)))
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_StartMenu, KF_FLAG_CREATE, nullptr, &startMenu)))
     {
-        std::filesystem::path folder(appData);
-        folder /= kAppName;
+        std::filesystem::path folder(startMenu);
+        folder /= L"Programs";
         std::error_code ignored;
         std::filesystem::create_directories(folder, ignored);
-        path = (folder / L"config.ini").wstring();
-        CoTaskMemFree(appData);
+        path = (folder / L"FFKeyLock.lnk").wstring();
+        CoTaskMemFree(startMenu);
     }
-
-    if (path.empty())
-    {
-        path = (std::filesystem::path(GetCurrentExePath()).parent_path() / L"config.ini").wstring();
-    }
-
     return path;
+}
+
+std::wstring GetConfigPath()
+{
+    const std::wstring appDataDirectory = GetAppDataDirectory();
+    return !appDataDirectory.empty()
+        ? (std::filesystem::path(appDataDirectory) / L"config.ini").wstring()
+        : (std::filesystem::path(GetCurrentExePath()).parent_path() / L"config.ini").wstring();
 }
 
 std::vector<std::wstring> SplitGames(const std::wstring& value)
@@ -144,8 +147,25 @@ std::wstring GetCurrentExePath()
     return path;
 }
 
+std::wstring GetAppDataDirectory()
+{
+    PWSTR appData = nullptr;
+    std::wstring path;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_CREATE, nullptr, &appData)))
+    {
+        std::filesystem::path folder(appData);
+        folder /= kAppName;
+        std::error_code ignored;
+        std::filesystem::create_directories(folder, ignored);
+        path = folder.wstring();
+        CoTaskMemFree(appData);
+    }
+    return path;
+}
+
 void SaveConfig()
 {
+    Log(LogLevel::Info, L"Saving configuration.");
     WritePrivateProfileStringW(kConfigSection, kProtectionKey, g_protectionEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kAutoDetectKey, g_autoDetectEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kWindowsKeyGuardKey, g_windowsKeyGuardEnabled ? L"1" : L"0", g_configPath.c_str());
@@ -169,6 +189,7 @@ void SaveConfig()
 void LoadConfig()
 {
     g_configPath = GetConfigPath();
+    Log(LogLevel::Info, L"Loading configuration from: " + g_configPath);
     g_protectionEnabled = GetPrivateProfileIntW(kConfigSection, kProtectionKey, 1, g_configPath.c_str()) != 0;
     g_autoDetectEnabled = GetPrivateProfileIntW(kConfigSection, kAutoDetectKey, 1, g_configPath.c_str()) != 0;
     g_windowsKeyGuardEnabled = GetPrivateProfileIntW(kConfigSection, kWindowsKeyGuardKey, 0, g_configPath.c_str()) != 0;
@@ -209,5 +230,35 @@ void LoadConfig()
         g_gameExeNames = { L"r5apex.exe", L"apex.exe", L"legend.exe", L"mir2.exe", L"mir3.exe" };
         SaveConfig();
     }
+}
+
+bool ClearLocalDataAndRegistry()
+{
+    Log(LogLevel::Warning, L"Clearing local data and registry entries.");
+
+    RegDeleteKeyValueW(HKEY_CURRENT_USER, kStartupRunKey, kAppName);
+
+    const std::wstring shortcutPath = GetStartMenuShortcutPath();
+    if (!shortcutPath.empty())
+    {
+        std::error_code ignored;
+        std::filesystem::remove(shortcutPath, ignored);
+    }
+
+    const std::wstring appDataDirectory = GetAppDataDirectory();
+    ShutdownLogger();
+
+    bool success = true;
+    if (!appDataDirectory.empty())
+    {
+        std::error_code error;
+        std::filesystem::remove_all(appDataDirectory, error);
+        success = !error;
+    }
+
+    g_configPath.clear();
+    g_gameExeNames.clear();
+    g_gameExePaths.clear();
+    return success;
 }
 }

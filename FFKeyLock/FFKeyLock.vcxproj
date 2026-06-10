@@ -150,6 +150,7 @@
     <ClInclude Include="GameProtection.h" />
     <ClInclude Include="InputLanguage.h" />
     <ClInclude Include="Localization.h" />
+    <ClInclude Include="Logger.h" />
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="NotificationIdentity.h" />
     <ClInclude Include="OverlayNotificationManager.h" />
@@ -173,6 +174,7 @@
     <ClCompile Include="GameProtection.cpp" />
     <ClCompile Include="InputLanguage.cpp" />
     <ClCompile Include="Localization.cpp" />
+    <ClCompile Include="Logger.cpp" />
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="NotificationIdentity.cpp" />
     <ClCompile Include="OverlayNotificationManager.cpp" />

@@ -5,6 +5,7 @@
 #include "AppState.h"
 #include "Config.h"
 #include "Localization.h"
+#include "Logger.h"
 #include "MainWindow.h"
 #include "NotificationIdentity.h"
 #include "TrayIcon.h"
@@ -43,6 +44,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 
     g_hInst = hInstance;
     g_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
+    InitializeLogger();
+    Log(LogLevel::Info, L"Application starting.");
     LoadConfig();
     InitializeNotificationIdentity();
     ApplyWindowsKeyGuard();
@@ -66,6 +69,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
         nullptr);
     if (!g_hWnd)
     {
+        Log(LogLevel::Error, L"Failed to create main window.");
+        ShutdownLogger();
         if (mutex)
         {
             CloseHandle(mutex);
@@ -77,6 +82,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
         return 1;
     }
 
+    UpdateMainWindow();
     ShowWindow(g_hWnd, nCmdShow);
     UpdateWindow(g_hWnd);
     ShowTrayNotification(L"FFKeyLock", Text(L"已在后台运行。", L"FFKeyLock is running in the background."));
@@ -96,5 +102,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
     {
         CoUninitialize();
     }
+    Log(LogLevel::Info, L"Application exiting.");
+    ShutdownLogger();
     return static_cast<int>(msg.wParam);
 }
