@@ -38,8 +38,6 @@ FFKeyLock 直接基于 Win32 编写，不依赖浏览器运行时、托管框架
 FFKeyLock-Setup-v0.3.0.exe
 ```
 
-安装向导支持英文和简体中文。安装过程中也可以选择 FFKeyLock 首次启动时使用的默认显示语言。
-
 ## 构建
 
 可以用 Visual Studio 打开 `FFKeyLock.slnx`，也可以使用 MSBuild 构建：

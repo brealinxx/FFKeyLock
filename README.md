@@ -39,8 +39,6 @@ Download the latest installer from [GitHub Releases](https://github.com/brealinx
 FFKeyLock-Setup.exe
 ```
 
-The installer supports English and Simplified Chinese wizard languages. During installation, you can also choose the default display language used by FFKeyLock on first launch.
-
 ## Build
 
 Open `FFKeyLock.slnx` in Visual Studio, or build with MSBuild:
