@@ -161,10 +161,14 @@
     <ClInclude Include="targetver.h" />
     <ClInclude Include="ThemeManager.h" />
     <ClInclude Include="TrayIcon.h" />
+    <ClInclude Include="Version.h" />
     <ClInclude Include="UI\Controls\ContentPanel.h" />
     <ClInclude Include="UI\Controls\RoundedButton.h" />
     <ClInclude Include="UI\Controls\ToggleSwitch.h" />
+    <ClInclude Include="UI\Main\MainContentView.h" />
     <ClInclude Include="UI\Menu\RoundedMenu.h" />
+    <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramCommands.h" />
+    <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramListView.h" />
     <ClInclude Include="WindowsKeyGuard.h" />
   </ItemGroup>
   <ItemGroup>
@@ -186,7 +190,10 @@
     <ClCompile Include="UI\Controls\ContentPanel.cpp" />
     <ClCompile Include="UI\Controls\RoundedButton.cpp" />
     <ClCompile Include="UI\Controls\ToggleSwitch.cpp" />
+    <ClCompile Include="UI\Main\MainContentView.cpp" />
     <ClCompile Include="UI\Menu\RoundedMenu.cpp" />
+    <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramCommands.cpp" />
+    <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramListView.cpp" />
     <ClCompile Include="WindowsKeyGuard.cpp" />
   </ItemGroup>
   <ItemGroup>

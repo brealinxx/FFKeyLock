@@ -10,9 +10,13 @@
 #include "Platform/GdiUtils.h"
 #include "Resource.h"
 #include "UI/Controls/ContentPanel.h"
+#include "UI/Main/MainContentView.h"
 #include "UI/Menu/RoundedMenu.h"
+#include "UI/ProtectedPrograms/ProtectedProgramCommands.h"
+#include "UI/ProtectedPrograms/ProtectedProgramListView.h"
 #include "ThemeManager.h"
 #include "TrayIcon.h"
+#include "Version.h"
 #include "WindowsKeyGuard.h"
 
 #include <commdlg.h>
@@ -71,14 +75,13 @@ struct ContentLayout
     RECT featureCard{};
     RECT programsCard{};
     RECT programLabel{};
-    RECT listRect{};
     int contentHeight = 0;
 };
 
 ContentLayout g_contentLayout{};
 std::vector<UiButton> g_contentButtons;
-int g_selectedGameIndex = -1;
-int g_gameListTopIndex = 0;
+MainContentView g_mainContentView;
+ProtectedProgramListView g_protectedProgramListView;
 
 int Scale(int value)
 {
@@ -172,11 +175,8 @@ void ApplyFonts()
 
 void RefreshProtectedBrowserList();
 int LayoutContentControls(HWND panel, int width, int height, int scrollY);
-void ClampGameListSelection();
-int HitTestGameListItem(POINT point, int scrollY);
 void EnsureContentLayoutForHitTest(int scrollY);
 void EnsureContentLayoutForHitTest();
-void InvalidateGameListItem(HWND panel, int index, int scrollY);
 
 RoundedMenuItem MenuItem(UINT id, const std::wstring& text, const std::wstring& shortcut = L"", bool checked = false, bool enabled = true)
 {
@@ -279,16 +279,6 @@ std::vector<RoundedMenuItem> BuildTrayMenu()
         MenuItem(IDM_SHOW_SETTINGS, Text(L"设置...", L"Settings...")),
         MenuItem(IDM_SHOW_WINDOW, Text(L"显示主窗口", L"Show main window")),
         MenuItem(IDM_EXIT, Text(L"退出", L"Exit")),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildGameListContextMenu()
-{
-    return {
-        MenuItem(IDM_COPY_GAME_NAME, Text(L"复制名称", L"Copy name"), L"Ctrl+C"),
-        MenuItem(IDM_OPEN_GAME_FOLDER, Text(L"跳转到该程序文件夹", L"Open program folder")),
-        MenuSeparator(),
-        MenuItem(IDM_DELETE_SELECTED_GAME, Text(L"删除选中", L"Delete selected")),
     };
 }
 
@@ -602,20 +592,15 @@ std::wstring StatusLine(const wchar_t* chineseLabel, const wchar_t* englishLabel
 
 void RefreshGameList()
 {
-    ClampGameListSelection();
+    g_mainContentView.Refresh();
+    g_protectedProgramListView.Refresh();
     InvalidateWindow(g_contentPanel);
     RefreshProtectedBrowserList();
 }
 
 std::wstring GetSelectedGameName()
 {
-    ClampGameListSelection();
-    if (g_selectedGameIndex < 0 || g_selectedGameIndex >= static_cast<int>(g_gameExeNames.size()))
-    {
-        return L"";
-    }
-
-    return g_gameExeNames[g_selectedGameIndex];
+    return g_protectedProgramListView.SelectedName();
 }
 
 std::wstring GetSelectedBrowserGameName()
@@ -733,125 +718,6 @@ void DrawFeatureRow(HDC hdc, int scrollY, int labelX, int labelWidth, int stateX
     DrawPanelText(hdc, value, VisualRect(stateRect, scrollY), ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-int GameListVisibleRows()
-{
-    const int itemHeight = Scale(28);
-    const int listHeight = g_contentLayout.listRect.bottom - g_contentLayout.listRect.top;
-    return itemHeight > 0 ? std::max(1, listHeight / itemHeight) : 1;
-}
-
-void ClampGameListSelection()
-{
-    const int itemCount = static_cast<int>(g_gameExeNames.size());
-    if (itemCount <= 0)
-    {
-        g_selectedGameIndex = -1;
-        g_gameListTopIndex = 0;
-        return;
-    }
-
-    g_selectedGameIndex = std::clamp(g_selectedGameIndex, -1, itemCount - 1);
-    const int visibleRows = GameListVisibleRows();
-    const int maxTop = std::max(0, itemCount - visibleRows);
-    g_gameListTopIndex = std::clamp(g_gameListTopIndex, 0, maxTop);
-    if (g_selectedGameIndex >= 0)
-    {
-        if (g_selectedGameIndex < g_gameListTopIndex)
-        {
-            g_gameListTopIndex = g_selectedGameIndex;
-        }
-        else if (g_selectedGameIndex >= g_gameListTopIndex + visibleRows)
-        {
-            g_gameListTopIndex = std::min(maxTop, g_selectedGameIndex - visibleRows + 1);
-        }
-    }
-}
-
-void DrawProgramList(HDC hdc, int scrollY)
-{
-    ClampGameListSelection();
-
-    RECT listRect = VisualRect(g_contentLayout.listRect, scrollY);
-    GdiUtils::FillRoundRect(hdc, listRect, ThemeManager::WindowColor(), ThemeManager::BorderColor(), Scale(6));
-
-    RECT clipRect = listRect;
-    InflateRect(&clipRect, -Scale(1), -Scale(1));
-    HRGN previousClip = CreateRectRgn(0, 0, 0, 0);
-    const int previousClipType = GetClipRgn(hdc, previousClip);
-    HRGN listClip = CreateRectRgn(clipRect.left, clipRect.top, clipRect.right, clipRect.bottom);
-    SelectClipRgn(hdc, listClip);
-    DeleteObject(listClip);
-
-    const int itemHeight = Scale(28);
-    const int itemCount = static_cast<int>(g_gameExeNames.size());
-    const int visibleRows = GameListVisibleRows();
-    if (itemCount == 0)
-    {
-        RECT emptyRect = clipRect;
-        emptyRect.left += Scale(12);
-        DrawPanelText(hdc, Text(L"尚未添加受保护程序", L"No protected programs yet"), emptyRect,
-            ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    }
-    else
-    {
-        for (int row = 0; row < visibleRows; ++row)
-        {
-            const int index = g_gameListTopIndex + row;
-            if (index >= itemCount)
-            {
-                break;
-            }
-
-            RECT itemRect{
-                clipRect.left,
-                clipRect.top + row * itemHeight,
-                clipRect.right,
-                clipRect.top + (row + 1) * itemHeight
-            };
-            if (index == g_selectedGameIndex)
-            {
-                HBRUSH selectedBrush = CreateSolidBrush(ThemeManager::ButtonHotColor());
-                FillRect(hdc, &itemRect, selectedBrush);
-                DeleteObject(selectedBrush);
-            }
-
-            RECT textRect = itemRect;
-            textRect.left += Scale(10);
-            textRect.right -= Scale(12);
-            DrawPanelText(hdc, g_gameExeNames[index], textRect, ThemeManager::TextColor(), ThemeManager::UiFont(),
-                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            GdiUtils::DrawSeparator(hdc, itemRect.left + Scale(8), itemRect.right - Scale(8), itemRect.bottom - 1, ThemeManager::BorderColor());
-        }
-    }
-
-    if (itemCount > visibleRows)
-    {
-        RECT track{ listRect.right - Scale(8), listRect.top + Scale(4), listRect.right - Scale(4), listRect.bottom - Scale(4) };
-        HBRUSH trackBrush = CreateSolidBrush(ThemeManager::SurfaceColor());
-        FillRect(hdc, &track, trackBrush);
-        DeleteObject(trackBrush);
-
-        const int trackHeight = std::max(1, static_cast<int>(track.bottom - track.top));
-        const int thumbHeight = std::max(Scale(18), MulDiv(trackHeight, visibleRows, itemCount));
-        const int maxTop = std::max(1, itemCount - visibleRows);
-        const int thumbTop = track.top + MulDiv(trackHeight - thumbHeight, g_gameListTopIndex, maxTop);
-        RECT thumb{ track.left, thumbTop, track.right, thumbTop + thumbHeight };
-        HBRUSH thumbBrush = CreateSolidBrush(ThemeManager::MutedTextColor());
-        FillRect(hdc, &thumb, thumbBrush);
-        DeleteObject(thumbBrush);
-    }
-
-    if (previousClipType == 1)
-    {
-        SelectClipRgn(hdc, previousClip);
-    }
-    else
-    {
-        SelectClipRgn(hdc, nullptr);
-    }
-    DeleteObject(previousClip);
-}
-
 void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
 {
     UNREFERENCED_PARAMETER(panel);
@@ -909,7 +775,7 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
 
     DrawCard(hdc, g_contentLayout.programsCard, scrollY, Text(L"受保护程序列表", L"Protected program list"));
 
-    DrawProgramList(hdc, scrollY);
+    g_protectedProgramListView.Draw(hdc, scrollY);
 
     for (const UiButton& button : g_contentButtons)
     {
@@ -940,25 +806,6 @@ void SetContentButtonState(HWND, int id, bool hot, bool pressed)
     }
 }
 
-int HitTestGameListItem(POINT point, int scrollY)
-{
-    POINT logicalPoint{ point.x, point.y + scrollY };
-    if (!PtInRect(&g_contentLayout.listRect, logicalPoint))
-    {
-        return -1;
-    }
-
-    const int itemHeight = Scale(28);
-    if (itemHeight <= 0)
-    {
-        return -1;
-    }
-
-    const int row = (logicalPoint.y - g_contentLayout.listRect.top) / itemHeight;
-    const int index = g_gameListTopIndex + row;
-    return index >= 0 && index < static_cast<int>(g_gameExeNames.size()) ? index : -1;
-}
-
 void EnsureContentLayoutForHitTest(int scrollY)
 {
     if (!g_contentPanel)
@@ -986,102 +833,27 @@ void EnsureContentPanelLayoutForHitTest(HWND panel)
     EnsureContentLayoutForHitTest(ContentPanel::ScrollY(panel));
 }
 
-bool SelectGameListItem(HWND panel, int index, int scrollY)
-{
-    if (index < 0 || index >= static_cast<int>(g_gameExeNames.size()))
-    {
-        return false;
-    }
-
-    if (index == g_selectedGameIndex)
-    {
-        return true;
-    }
-
-    const int oldIndex = g_selectedGameIndex;
-    g_selectedGameIndex = index;
-    ClampGameListSelection();
-    InvalidateGameListItem(panel, oldIndex, scrollY);
-    InvalidateGameListItem(panel, g_selectedGameIndex, scrollY);
-    return true;
-}
-
-void InvalidateGameListItem(HWND panel, int index, int scrollY)
-{
-    if (!panel || index < 0 || index < g_gameListTopIndex)
-    {
-        return;
-    }
-
-    const int row = index - g_gameListTopIndex;
-    if (row < 0 || row >= GameListVisibleRows())
-    {
-        return;
-    }
-
-    RECT rect = VisualRect(g_contentLayout.listRect, scrollY);
-    rect.top += row * Scale(28);
-    rect.bottom = rect.top + Scale(28);
-    InvalidateRect(panel, &rect, FALSE);
-}
-
 void ContentPanelClicked(HWND panel, POINT point, int scrollY)
 {
     EnsureContentLayoutForHitTest(scrollY);
-    const int index = HitTestGameListItem(point, scrollY);
-    SelectGameListItem(panel, index, scrollY);
+    g_protectedProgramListView.OnLeftDown(panel, point, scrollY);
 }
 
 bool ContentPanelMouseDown(HWND panel, POINT point, int scrollY)
 {
     EnsureContentLayoutForHitTest(scrollY);
-    const int index = HitTestGameListItem(point, scrollY);
-    return SelectGameListItem(panel, index, scrollY);
+    return g_protectedProgramListView.OnLeftDown(panel, point, scrollY);
 }
 
 void ContentPanelRightClicked(HWND panel, POINT clientPoint, int scrollY)
 {
     EnsureContentLayoutForHitTest(scrollY);
-    const int index = HitTestGameListItem(clientPoint, scrollY);
-    if (index < 0)
-    {
-        return;
-    }
-
-    SelectGameListItem(panel, index, scrollY);
-
-    POINT screenPoint = clientPoint;
-    ClientToScreen(panel, &screenPoint);
-    RoundedMenu::ShowAndDispatch(g_hWnd, screenPoint, BuildGameListContextMenu());
+    g_protectedProgramListView.OnRightUp(panel, clientPoint, scrollY);
 }
 
-bool ContentPanelWheel(HWND, POINT point, int scrollY, int delta)
+bool ContentPanelWheel(HWND panel, POINT point, int scrollY, int delta)
 {
-    POINT logicalPoint{ point.x, point.y + scrollY };
-    if (!PtInRect(&g_contentLayout.listRect, logicalPoint))
-    {
-        return false;
-    }
-
-    const int itemCount = static_cast<int>(g_gameExeNames.size());
-    const int visibleRows = GameListVisibleRows();
-    const int maxTop = std::max(0, itemCount - visibleRows);
-    if (maxTop <= 0)
-    {
-        return false;
-    }
-
-    const int lines = std::max(1, std::abs(delta) / WHEEL_DELTA);
-    if (delta > 0)
-    {
-        g_gameListTopIndex -= lines;
-    }
-    else
-    {
-        g_gameListTopIndex += lines;
-    }
-    g_gameListTopIndex = std::clamp(g_gameListTopIndex, 0, maxTop);
-    return true;
+    return g_protectedProgramListView.OnWheel(panel, point, scrollY, delta);
 }
 
 void CreateMainControls()
@@ -1154,8 +926,8 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         g_contentLayout.featureCard = RECT{ margin, featureY, margin + contentWidth, featureY + featureHeight };
         g_contentLayout.programsCard = RECT{ margin, programsY, margin + contentWidth, programsY + programsHeight };
         g_contentLayout.programLabel = RECT{ programsTitleX, programsY + Scale(10), programsHelpX, programsY + Scale(34) };
-        g_contentLayout.listRect = RECT{ listX, listY, listX + listWidth, listY + listHeight };
         g_contentLayout.contentHeight = g_contentHeight;
+        g_protectedProgramListView.SetBounds(RECT{ listX, listY, listX + listWidth, listY + listHeight });
 
         g_contentButtons.clear();
         AddContentButton(IDC_PROTECTION_BUTTON, RECT{ firstButtonX, featureY + Scale(28), firstButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled));
@@ -1176,7 +948,7 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + Scale(84), actionButtonX + actionButtonWidth, listY + Scale(84) + buttonHeight }, Text(L"从文件选择", L"Choose file"));
         AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ actionButtonX, listY + Scale(126), actionButtonX + actionButtonWidth, listY + Scale(126) + buttonHeight }, Text(L"删除选中", L"Delete selected"));
 
-        ClampGameListSelection();
+        g_protectedProgramListView.Refresh();
         return g_contentHeight;
     }
 }
@@ -1239,68 +1011,18 @@ void AddGameFromFileDialog()
 
 void DeleteSelectedGame()
 {
-    ClampGameListSelection();
-    const int selected = g_selectedGameIndex;
-    if (selected < 0 || selected >= static_cast<int>(g_gameExeNames.size()))
-    {
-        MessageBoxW(g_hWnd,
-            Text(L"请选择一个受保护程序。", L"Select an item in the protected program list first."),
-            L"FFKeyLock",
-            MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-
-    const std::wstring exeName = g_gameExeNames[selected];
-    g_gameExeNames.erase(g_gameExeNames.begin() + selected);
-    g_gameExePaths.erase(exeName);
-    g_selectedGameIndex = std::min(selected, static_cast<int>(g_gameExeNames.size()) - 1);
-    ClampGameListSelection();
-    SaveConfig();
+    g_protectedProgramListView.DeleteSelected();
     RefreshGameList();
 }
 void CopyTextToClipboard(const std::wstring& text)
 {
-    if (text.empty() || !OpenClipboard(g_hWnd))
-    {
-        return;
-    }
-
-    EmptyClipboard();
-    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (memory)
-    {
-        void* data = GlobalLock(memory);
-        if (data)
-        {
-            CopyMemory(data, text.c_str(), bytes);
-            GlobalUnlock(memory);
-            SetClipboardData(CF_UNICODETEXT, memory);
-            memory = nullptr;
-        }
-    }
-    if (memory)
-    {
-        GlobalFree(memory);
-    }
-    CloseClipboard();
+    ProtectedProgramCommands::CopyNameToClipboard(g_hWnd, text);
 }
 
 void OpenGameFolder(const std::wstring& exeName)
 {
     const auto path = g_gameExePaths.find(exeName);
-    if (exeName.empty() || path == g_gameExePaths.end() || path->second.empty())
-    {
-        MessageBoxW(g_hWnd,
-            Text(L"这个条目只保存了程序名称，没有保存文件路径。请通过“浏览添加受保护程序...”重新添加一次即可记录路径。",
-                L"This item only has an executable name, not a saved file path. Add it again with Browse to record its path."),
-            L"FFKeyLock",
-            MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-
-    std::wstring argument = L"/select,\"" + path->second + L"\"";
-    ShellExecuteW(g_hWnd, L"open", L"explorer.exe", argument.c_str(), nullptr, SW_SHOWNORMAL);
+    ProtectedProgramCommands::OpenProgramFolder(g_hWnd, exeName, path == g_gameExePaths.end() ? L"" : path->second);
 }
 
 void OpenSelectedGameFolder()
@@ -1530,25 +1252,7 @@ void ShowGameListContextMenu(LPARAM lParam)
 
     const int scrollY = ContentPanel::ScrollY(g_contentPanel);
     EnsureContentLayoutForHitTest(scrollY);
-    if (g_selectedGameIndex < 0)
-    {
-        return;
-    }
-
-    RECT selectedRect = VisualRect(g_contentLayout.listRect, scrollY);
-    const int row = g_selectedGameIndex - g_gameListTopIndex;
-    selectedRect.top += row * Scale(28);
-    selectedRect.bottom = selectedRect.top + Scale(28);
-
-    POINT point{ selectedRect.left + Scale(16), selectedRect.top + Scale(14) };
-    ClientToScreen(g_contentPanel, &point);
-
-    if (GetSelectedGameName().empty())
-    {
-        return;
-    }
-
-    RoundedMenu::ShowAndDispatch(g_hWnd, point, BuildGameListContextMenu());
+    g_protectedProgramListView.OnRightUp(g_contentPanel, POINT{ -1, -1 }, scrollY);
 }
 void PaintMainWindow(HWND hWnd)
 {
@@ -1587,6 +1291,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         SetWindowLongPtrW(hWnd, GWL_STYLE, (GetWindowLongPtrW(hWnd, GWL_STYLE) & ~WS_VSCROLL) | WS_CLIPCHILDREN);
         ThemeManager::Initialize(GetDpiForWindow(hWnd));
         ThemeManager::ApplyDarkTitleBar(hWnd);
+        g_protectedProgramListView.SetItems(&g_gameExeNames, &g_gameExePaths);
         CreateMenuBar(hWnd);
         g_contentPanel = ContentPanel::Create(hWnd, g_hInst);
         ContentPanel::SetLayoutCallback(g_contentPanel, LayoutContentControls);
@@ -1977,7 +1682,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         case IDM_ABOUT:
             MessageBoxW(hWnd,
-                Text(L"FFKeyLock\n\n轻量级 Win32 游戏输入法保护工具。\n\nVersion 0.1\nAssembly by brealin", L"FFKeyLock\n\nLightweight Win32 game input-language protection utility.\n\nVersion 0.1\nAssembly by brealin"),
+                (std::wstring(Text(L"FFKeyLock\n\n轻量级 Win32 游戏输入法保护工具。\n\nVersion ", L"FFKeyLock\n\nLightweight Win32 game input-language protection utility.\n\nVersion ")) + FFKEYLOCK_VERSION_TEXT_W + L"\nAssembly by brealin").c_str(),
                 Text(L"关于 FFKeyLock", L"About FFKeyLock"),
 
                 MB_OK | MB_ICONINFORMATION);
