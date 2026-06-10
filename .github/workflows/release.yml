@@ -28,7 +28,42 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build Release x64
-        run: msbuild FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+        run: msbuild FFKeyLock.slnx /t:Rebuild /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Verify runtime dependencies
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio with VC tools was not found."
+          }
+
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object { $_.FullName -like "*\Hostx64\x64\dumpbin.exe" } |
+            Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "dumpbin.exe was not found."
+          }
+
+          $deps = & $dumpbin.FullName /DEPENDENTS x64\Release\FFKeyLock.exe
+          $deps | Out-String | Write-Host
+
+          $forbidden = $deps | Select-String -Pattern "MSVCP|VCRUNTIME|api-ms-win-crt"
+          if ($forbidden) {
+            throw "Release executable depends on VC++ runtime DLLs. Build must use the static runtime (/MT)."
+          }
+
+      - name: Smoke test executable startup
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "$PWD\x64\Release\FFKeyLock.exe" -PassThru
+          Start-Sleep -Seconds 3
+          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+          if (-not $running) {
+            throw "FFKeyLock.exe exited immediately during startup smoke test."
+          }
+          Stop-Process -Id $process.Id -Force
 
       - name: Install Inno Setup
         shell: pwsh
@@ -39,6 +74,49 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $iscc installer\FFKeyLock.iss /DAppVersion=${{ steps.version.outputs.version }}
+
+      - name: Verify installer output
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $installer = "installer\output\FFKeyLock-Setup-v$version.exe"
+          if (-not (Test-Path $installer)) {
+            throw "Installer was not generated: $installer"
+          }
+          Get-Item $installer | Format-List FullName,Length,LastWriteTime
+
+      - name: Smoke test installed executable
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $installer = "$PWD\installer\output\FFKeyLock-Setup-v$version.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "FFKeyLockInstallSmoke"
+
+          if (Test-Path $installDir) {
+            Remove-Item -LiteralPath $installDir -Recurse -Force
+          }
+
+          $setup = Start-Process -FilePath $installer `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LANG=english", "/DIR=$installDir") `
+            -Wait `
+            -PassThru
+
+          if ($setup.ExitCode -ne 0) {
+            throw "Installer smoke install failed with exit code $($setup.ExitCode)."
+          }
+
+          $exe = Join-Path $installDir "FFKeyLock.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Installed executable was not found: $exe"
+          }
+
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 3
+          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+          if (-not $running) {
+            throw "Installed FFKeyLock.exe exited immediately during installer smoke test."
+          }
+          Stop-Process -Id $process.Id -Force
 
       - name: Create portable package
         shell: pwsh
@@ -55,6 +133,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: FFKeyLock ${{ github.ref_name }}
+          fail_on_unmatched_files: true
           files: |
             installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}.exe
             dist/FFKeyLock-v${{ steps.version.outputs.version }}-x64.zip

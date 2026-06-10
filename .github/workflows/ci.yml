@@ -20,7 +20,42 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build Release x64
-        run: msbuild FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+        run: msbuild FFKeyLock.slnx /t:Rebuild /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Verify runtime dependencies
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio with VC tools was not found."
+          }
+
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object { $_.FullName -like "*\Hostx64\x64\dumpbin.exe" } |
+            Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "dumpbin.exe was not found."
+          }
+
+          $deps = & $dumpbin.FullName /DEPENDENTS x64\Release\FFKeyLock.exe
+          $deps | Out-String | Write-Host
+
+          $forbidden = $deps | Select-String -Pattern "MSVCP|VCRUNTIME|api-ms-win-crt"
+          if ($forbidden) {
+            throw "Release executable depends on VC++ runtime DLLs. Build must use the static runtime (/MT)."
+          }
+
+      - name: Smoke test executable startup
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "$PWD\x64\Release\FFKeyLock.exe" -PassThru
+          Start-Sleep -Seconds 3
+          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+          if (-not $running) {
+            throw "FFKeyLock.exe exited immediately during startup smoke test."
+          }
+          Stop-Process -Id $process.Id -Force
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
