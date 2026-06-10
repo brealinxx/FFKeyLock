@@ -16,5 +16,8 @@ F:\VisualStudioProject\FFKeyLock\FFKeyLock\TrayIcon.cpp;F:\VisualStudioProject\F
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Controls\ContentPanel.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\ContentPanel.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Controls\RoundedButton.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\RoundedButton.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Controls\ToggleSwitch.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\ToggleSwitch.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Main\MainContentView.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\MainContentView.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Menu\RoundedMenu.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\RoundedMenu.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\ProtectedPrograms\ProtectedProgramCommands.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\ProtectedProgramCommands.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\ProtectedPrograms\ProtectedProgramListView.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\ProtectedProgramListView.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\WindowsKeyGuard.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\x64\Debug\WindowsKeyGuard.obj
