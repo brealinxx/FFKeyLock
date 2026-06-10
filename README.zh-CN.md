@@ -1,7 +1,5 @@
 # FFKeyLock
 
-当前版本：**v0.3**
-
 FFKeyLock 是一个轻量级 Windows 托盘工具，用来减少游戏时输入法误切换带来的干扰。它会检测当前前台窗口，识别已配置的受保护程序，并在保护状态下把输入法切换到英文。
 
 [English](README.md)
@@ -34,7 +32,7 @@ FFKeyLock 直接基于 Win32 编写，不依赖浏览器运行时、托管框架
 
 ## 安装
 
-可以从 GitHub Releases 下载最新安装包：
+可以从 [GitHub Releases](https://github.com/brealinxx/FFKeyLock/releases/latest) 下载最新安装包：
 
 ```text
 FFKeyLock-Setup-v0.3.0.exe
@@ -65,13 +63,6 @@ ISCC.exe installer/FFKeyLock.iss
 ```
 
 安装包会生成到 `installer/output/`。
-
-## 自动发布
-
-GitHub Actions 包含：
-
-- `ci.yml`：在 push 和 pull request 时构建项目。
-- `release.yml`：当推送类似 `v0.3.0` 的 tag 时，自动构建程序、使用 Inno Setup 打包，并上传到对应 GitHub Release。
 
 ## 配置
 

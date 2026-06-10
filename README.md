@@ -1,6 +1,5 @@
 # FFKeyLock
 
-Current version: **v0.3**
 
 FFKeyLock is a lightweight Windows tray utility for keeping game input reliable. It watches the foreground window, detects configured protected executables, and switches the input language to English while a protected program is active.
 
@@ -65,13 +64,6 @@ ISCC.exe installer/FFKeyLock.iss
 ```
 
 The installer is generated under `installer/output/`.
-
-## Release Automation
-
-GitHub Actions includes:
-
-- `ci.yml`: builds the project on pushes and pull requests.
-- `release.yml`: when a tag like `v0.3.0` is pushed, builds the app, packages it with Inno Setup, and uploads artifacts to the matching GitHub Release.
 
 ## Configuration
 
