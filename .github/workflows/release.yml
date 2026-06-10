@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build Release x64
+        run: msbuild FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc installer\FFKeyLock.iss /DAppVersion=${{ steps.version.outputs.version }}
+
+      - name: Create portable package
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $packageRoot = "dist\FFKeyLock-v$version-x64"
+          New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
+          Copy-Item x64\Release\FFKeyLock.exe $packageRoot\
+          Copy-Item FFKeyLock\FFKeyLock.ico $packageRoot\
+          Copy-Item README.md,README.zh-CN.md,CHANGELOG.md,CHANGELOG-en.md,LICENSE $packageRoot\
+          Compress-Archive -Path $packageRoot -DestinationPath "dist\FFKeyLock-v$version-x64.zip" -Force
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FFKeyLock ${{ github.ref_name }}
+          files: |
+            installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}.exe
+            dist/FFKeyLock-v${{ steps.version.outputs.version }}-x64.zip

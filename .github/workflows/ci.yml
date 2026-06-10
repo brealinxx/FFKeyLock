@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release x64
+        run: msbuild FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFKeyLock-x64-Release
+          path: x64/Release/FFKeyLock.exe
+          if-no-files-found: error
