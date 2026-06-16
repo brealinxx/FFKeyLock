@@ -25,6 +25,19 @@ int ScaleForDpi(int value, UINT dpi)
     return DpiUtils::Scale(value, dpi);
 }
 
+UINT DpiForPoint(POINT point)
+{
+    HMONITOR monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+    UINT dpiX = USER_DEFAULT_SCREEN_DPI;
+    UINT dpiY = USER_DEFAULT_SCREEN_DPI;
+    if (monitor && SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY)))
+    {
+        return dpiX ? dpiX : USER_DEFAULT_SCREEN_DPI;
+    }
+
+    return GetDpiForSystem();
+}
+
 HFONT CreateMenuFont(UINT dpi)
 {
     LOGFONTW font{};
@@ -680,7 +693,7 @@ UINT RoundedMenu::Show(HWND owner, POINT anchor, const std::vector<RoundedMenuIt
 
     auto state = std::make_unique<MenuState>();
     state->owner = owner;
-    state->dpi = GetDpiForWindow(owner);
+    state->dpi = activate ? GetDpiForWindow(owner) : DpiForPoint(anchor);
     state->font = CreateMenuFont(state->dpi);
     state->items = items;
     state->activate = activate;

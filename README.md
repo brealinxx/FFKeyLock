@@ -45,12 +45,16 @@ Open `FFKeyLock.slnx` in Visual Studio, or build with MSBuild:
 
 ```powershell
 MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=Win32 /m
+MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=ARM64 /m
 ```
 
-The release executable is generated at:
+Release executables are generated at:
 
 ```text
 x64/Release/FFKeyLock.exe
+Release/FFKeyLock.exe
+ARM64/Release/FFKeyLock.exe
 ```
 
 ## Package
@@ -58,10 +62,12 @@ x64/Release/FFKeyLock.exe
 Install Inno Setup, then compile the installer script:
 
 ```powershell
-ISCC.exe installer/FFKeyLock.iss
+ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=x64
+ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=x86
+ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=arm64
 ```
 
-The installer is generated under `installer/output/`.
+Installers are generated under `installer/output/` with the target architecture in the file name.
 
 ## Configuration
 

@@ -176,6 +176,11 @@ void SetBoolWindowAttribute(HWND hwnd, DWORD attribute, BOOL value)
     DwmSetWindowAttribute(hwnd, attribute, &value, sizeof(value));
 }
 
+void SetColorWindowAttribute(HWND hwnd, DWORD attribute, COLORREF value)
+{
+    DwmSetWindowAttribute(hwnd, attribute, &value, sizeof(value));
+}
+
 LRESULT CALLBACK ButtonSubclassProc(HWND button, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData)
 {
     UNREFERENCED_PARAMETER(wParam);
@@ -311,7 +316,7 @@ void ThemeManager::ApplyTheme(HWND root)
     SendMessageW(root, WM_SETFONT, reinterpret_cast<WPARAM>(g_uiFont), TRUE);
     EnumChildWindows(root, ApplyThemeToChild, 0);
     InvalidateRect(root, nullptr, TRUE);
-    RedrawWindow(root, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    RedrawWindow(root, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 void ThemeManager::ApplyDarkTitleBar(HWND hwnd)
@@ -324,6 +329,22 @@ void ThemeManager::ApplyDarkTitleBar(HWND hwnd)
     BOOL dark = g_dark ? TRUE : FALSE;
     SetBoolWindowAttribute(hwnd, 20, dark);
     SetBoolWindowAttribute(hwnd, 19, dark);
+
+    const COLORREF captionColor = g_dark ? g_windowColor : RGB(245, 245, 245);
+    const COLORREF textColor = g_dark ? RGB(255, 255, 255) : RGB(0, 0, 0);
+    SetColorWindowAttribute(hwnd, 35, captionColor);
+    SetColorWindowAttribute(hwnd, 36, textColor);
+    SetColorWindowAttribute(hwnd, 34, g_borderColor);
+
+    SetWindowPos(
+        hwnd,
+        nullptr,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW);
 }
 
 void ThemeManager::HandleSettingChange(HWND root)

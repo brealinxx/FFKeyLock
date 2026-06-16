@@ -35,7 +35,7 @@ FFKeyLock 直接基于 Win32 编写，不依赖浏览器运行时、托管框架
 可以从 [GitHub Releases](https://github.com/brealinxx/FFKeyLock/releases/latest) 下载最新安装包：
 
 ```text
-FFKeyLock-Setup-v0.3.0.exe
+FFKeyLock-Setup-.exe
 ```
 
 ## 构建
@@ -44,12 +44,16 @@ FFKeyLock-Setup-v0.3.0.exe
 
 ```powershell
 MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=Win32 /m
+MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=ARM64 /m
 ```
 
 Release 可执行文件会生成到：
 
 ```text
 x64/Release/FFKeyLock.exe
+Release/FFKeyLock.exe
+ARM64/Release/FFKeyLock.exe
 ```
 
 ## 打包
@@ -57,7 +61,9 @@ x64/Release/FFKeyLock.exe
 安装 Inno Setup 后，编译安装脚本：
 
 ```powershell
-ISCC.exe installer/FFKeyLock.iss
+ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=x64
+ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=x86
+ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=arm64
 ```
 
 安装包会生成到 `installer/output/`。

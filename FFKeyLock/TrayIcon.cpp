@@ -9,6 +9,14 @@
 
 namespace FFKeyLock
 {
+namespace
+{
+int GetShellIconMetric(int metric)
+{
+    return GetSystemMetricsForDpi(metric, GetDpiForSystem());
+}
+}
+
 HICON LoadAppIcon(int width, int height)
 {
     HICON icon = reinterpret_cast<HICON>(LoadImageW(
@@ -38,10 +46,10 @@ void ShowTrayNotification(const wchar_t* title, const wchar_t* message, bool pro
     {
         if (!g_trayIcon)
         {
-            g_trayIcon = LoadAppIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+            g_trayIcon = LoadAppIcon(GetShellIconMetric(SM_CXSMICON), GetShellIconMetric(SM_CYSMICON));
         }
 
-        HICON balloonIcon = LoadAppIcon(GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+        HICON balloonIcon = LoadAppIcon(GetShellIconMetric(SM_CXICON), GetShellIconMetric(SM_CYICON));
         NOTIFYICONDATAW nid{};
         nid.cbSize = sizeof(nid);
         nid.hWnd = g_hWnd;
@@ -71,7 +79,7 @@ void AddTrayIcon()
 {
     if (!g_trayIcon)
     {
-        g_trayIcon = LoadAppIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+        g_trayIcon = LoadAppIcon(GetShellIconMetric(SM_CXSMICON), GetShellIconMetric(SM_CYSMICON));
     }
 
     NOTIFYICONDATAW nid{};

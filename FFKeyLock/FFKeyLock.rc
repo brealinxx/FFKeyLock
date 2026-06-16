@@ -22,13 +22,13 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "brealin"
-            VALUE "FileDescription", "FFKeyLock"
-            VALUE "FileVersion", FFKEYLOCK_VERSION_TEXT
-            VALUE "InternalName", "FFKeyLock"
-            VALUE "OriginalFilename", "FFKeyLock.exe"
-            VALUE "ProductName", "FFKeyLock"
-            VALUE "ProductVersion", FFKEYLOCK_VERSION_TEXT
+            VALUE "CompanyName", "brealin\0"
+            VALUE "FileDescription", "FFKeyLock\0"
+            VALUE "FileVersion", FFKEYLOCK_VERSION_TEXT "\0"
+            VALUE "InternalName", "FFKeyLock\0"
+            VALUE "OriginalFilename", "FFKeyLock.exe\0"
+            VALUE "ProductName", "FFKeyLock\0"
+            VALUE "ProductVersion", FFKEYLOCK_VERSION_TEXT "\0"
         END
     END
     BLOCK "VarFileInfo"

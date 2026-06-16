@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## v0.4
+
+### Added
+
+- Added multi-architecture build and release coverage for x64, x86, and ARM64.
+- Added Windows 10 / Windows 11 compatibility metadata to the application manifest.
+- Added a tray menu action for adding the current program without opening the main window.
+
+### Changed
+
+- Updated project version references to `v0.4` / `0.4.0`.
+- Renamed "Add program" to "Add current program" for clearer intent.
+- Changed protection-entry notifications to use overlay notifications instead of system toast notifications.
+- Made tray menu sizing independent from the main window DPI when the window moves between monitors.
+- Improved tray "Add current program" targeting by ignoring Windows shell processes and selecting the nearest real application window.
+- Extended packaging and GitHub release automation to produce architecture-specific installer and portable artifacts.
+
+### Fixed
+
+- Fixed tray Exit so it fully terminates the application instead of only hiding UI elements.
+- Fixed title bar colors not always updating immediately after theme changes.
+- Fixed accidental protected-program additions caused by stray command messages.
+- Fixed cases where tray "Add current program" could add `explorer.exe` or `ShellExperienceHost.exe`.
+
 ## v0.3
 
 ### Added

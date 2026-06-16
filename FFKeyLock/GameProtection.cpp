@@ -112,7 +112,12 @@ void EnterGameProtection(HWND foregroundWindow)
     g_chatInputSuspended = false;
     g_chatInputSuspendUntil = 0;
     SwitchToEnglish(foregroundWindow);
-    ShowTrayNotification(L"FFKeyLock", Text(L"已进入保护模式，输入法已锁定为英文。", L"Protection is active. Input language is locked to English."), true);
+    if (g_overlayNotificationsEnabled)
+    {
+        OverlayNotificationManager::ShowSuccess(
+            L"FFKeyLock",
+            Text(L"已进入保护模式，输入法已锁定为英文。", L"Protection is active. Input language is locked to English."));
+    }
     UpdateMainWindow();
 }
 }

@@ -431,7 +431,7 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         SetHotButton(hwnd, *state, releasedId);
         if (pressedId && pressedId == releasedId)
         {
-            SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(pressedId, BN_CLICKED), 0);
+            SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(pressedId, BN_CLICKED), reinterpret_cast<LPARAM>(hwnd));
         }
         else if (!pressedId && state->click)
         {

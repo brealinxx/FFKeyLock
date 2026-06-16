@@ -36,6 +36,8 @@ namespace
 {
 constexpr wchar_t kProtectedBrowserClass[] = L"FFKeyLockProtectedBrowser";
 constexpr wchar_t kMenuBarClass[] = L"FFKeyLockMenuBar";
+constexpr wchar_t kGitHubProjectUrl[] = L"https://github.com/brealinxx/FFKeyLock";
+constexpr wchar_t kLatestReleaseUrl[] = L"https://github.com/brealinxx/FFKeyLock/releases/latest";
 HWND g_protectedBrowserWindow = nullptr;
 HWND g_protectedBrowserList = nullptr;
 HWND g_menuBar = nullptr;
@@ -48,6 +50,8 @@ std::vector<RECT> g_menuBarItems;
 int g_menuBarHotIndex = -1;
 int g_menuBarOpenIndex = -1;
 bool g_menuBarMouseTracking = false;
+bool g_isQuitting = false;
+bool g_trayAddCurrentRequested = false;
 int g_scrollY = 0;
 int g_contentHeight = 0;
 
@@ -111,6 +115,22 @@ void InvalidateWindowAndChildren(HWND hwnd)
     }
 
     RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
+void QuitApplication()
+{
+    g_isQuitting = true;
+    RoundedMenu::CloseAll();
+    g_menuBarOpenIndex = -1;
+
+    if (g_hWnd && IsWindow(g_hWnd))
+    {
+        DestroyWindow(g_hWnd);
+    }
+    else
+    {
+        PostQuitMessage(0);
+    }
 }
 
 void InvalidateMenuBarItem(int index)
@@ -276,7 +296,7 @@ std::vector<RoundedMenuItem> BuildTrayMenu()
         MenuItem(IDM_AUTO_DETECT, g_autoDetectEnabled ? Text(L"自动检测：开启", L"Auto detect: On") : Text(L"自动检测：关闭", L"Auto detect: Off"), L"", g_autoDetectEnabled),
         MenuItem(IDM_WINDOWS_KEY_GUARD, g_windowsKeyGuardEnabled ? Text(L"Win 键：禁用", L"Win key: Disabled") : Text(L"Win 键：开启", L"Win key: Enabled"), L"", g_windowsKeyGuardEnabled),
         MenuSeparator(),
-        MenuItem(IDM_SHOW_SETTINGS, Text(L"设置...", L"Settings...")),
+        MenuItem(IDM_ADD_CURRENT_GAME, Text(L"添加当前程序", L"Add current program")),
         MenuItem(IDM_SHOW_WINDOW, Text(L"显示主窗口", L"Show main window")),
         MenuItem(IDM_EXIT, Text(L"退出", L"Exit")),
     };
@@ -287,6 +307,37 @@ void OpenFolderPath(const std::wstring& path)
     if (!path.empty())
     {
         ShellExecuteW(g_hWnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+}
+
+bool OpenExternalUrl(HWND owner, const wchar_t* url)
+{
+    const HINSTANCE result = ShellExecuteW(owner, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) > 32)
+    {
+        return true;
+    }
+
+    MessageBoxW(owner,
+        Text(L"无法打开浏览器，请稍后手动访问该链接。", L"Unable to open the browser. Please visit the link manually later."),
+        L"FFKeyLock",
+        MB_OK | MB_ICONWARNING);
+    return false;
+}
+
+void OpenLatestReleasePage(HWND owner)
+{
+    const std::wstring message =
+        std::wstring(Text(L"当前版本：", L"Current version: ")) +
+        FFKEYLOCK_VERSION_TEXT_W +
+        Text(L"\n\n将打开 GitHub Releases 页面查看最新版本。", L"\n\nOpen the GitHub Releases page to view the latest version.");
+
+    if (MessageBoxW(owner,
+        message.c_str(),
+        Text(L"检查更新", L"Check updates"),
+        MB_OKCANCEL | MB_ICONINFORMATION) == IDOK)
+    {
+        OpenExternalUrl(owner, kLatestReleaseUrl);
     }
 }
 
@@ -943,7 +994,7 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
             AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ firstButtonX, featureY + Scale(160), firstButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
         }
         AddContentButton(IDC_GAME_LIST_HELP, RECT{ programsHelpX, programsY + Scale(8), programsHelpX + Scale(28), programsY + Scale(36) }, L"?");
-        AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加程序", L"Add program"));
+        AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加当前程序", L"Add current program"));
         AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ actionButtonX, listY + Scale(42), actionButtonX + actionButtonWidth, listY + Scale(42) + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
         AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + Scale(84), actionButtonX + actionButtonWidth, listY + Scale(84) + buttonHeight }, Text(L"从文件选择", L"Choose file"));
         AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ actionButtonX, listY + Scale(126), actionButtonX + actionButtonWidth, listY + Scale(126) + buttonHeight }, Text(L"删除选中", L"Delete selected"));
@@ -980,13 +1031,110 @@ void ApplyTheme()
     }
     if (g_hWnd)
     {
-        InvalidateWindowAndChildren(g_hWnd);
+        RedrawWindow(g_hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
 }
 
 bool IsOwnWindow(HWND hwnd)
 {
     return hwnd && g_hWnd && GetAncestor(hwnd, GA_ROOT) == g_hWnd;
+}
+
+bool IsExplorerShellWindowClass(const wchar_t* className)
+{
+    return _wcsicmp(className, L"Shell_TrayWnd") == 0 ||
+        _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0 ||
+        _wcsicmp(className, L"NotifyIconOverflowWindow") == 0 ||
+        _wcsicmp(className, L"Progman") == 0 ||
+        _wcsicmp(className, L"WorkerW") == 0;
+}
+
+bool IsExplorerProcess(HWND hwnd)
+{
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+    if (!processId)
+    {
+        return false;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process)
+    {
+        return false;
+    }
+
+    std::wstring path(MAX_PATH, L'\0');
+    DWORD size = static_cast<DWORD>(path.size());
+    const bool queried = QueryFullProcessImageNameW(process, 0, path.data(), &size) != FALSE;
+    CloseHandle(process);
+    if (!queried)
+    {
+        return false;
+    }
+
+    path.resize(size);
+    const std::wstring exeName = std::filesystem::path(path).filename().wstring();
+    const wchar_t* blockedShellProcesses[] = {
+        L"explorer.exe",
+        L"shellexperiencehost.exe",
+        L"startmenuexperiencehost.exe",
+        L"searchhost.exe",
+        L"textinputhost.exe",
+        L"applicationframehost.exe",
+        L"runtimebroker.exe",
+    };
+
+    for (const wchar_t* blockedProcess : blockedShellProcesses)
+    {
+        if (_wcsicmp(exeName.c_str(), blockedProcess) == 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool IsAddableExternalWindow(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd) || IsOwnWindow(hwnd))
+    {
+        return false;
+    }
+
+    HWND root = GetAncestor(hwnd, GA_ROOT);
+    if (root && root != hwnd)
+    {
+        hwnd = root;
+    }
+
+    if (!IsWindowVisible(hwnd))
+    {
+        return false;
+    }
+
+    wchar_t className[64]{};
+    GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
+    if (IsExplorerShellWindowClass(className) || IsExplorerProcess(hwnd))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+HWND FindRecentAddableExternalWindow()
+{
+    for (HWND hwnd = GetTopWindow(nullptr); hwnd; hwnd = GetWindow(hwnd, GW_HWNDNEXT))
+    {
+        if (IsAddableExternalWindow(hwnd))
+        {
+            return GetAncestor(hwnd, GA_ROOT);
+        }
+    }
+
+    return nullptr;
 }
 
 void AddGameFromFileDialog()
@@ -1514,7 +1662,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                         : Text(L"清理已执行，但部分文件可能仍被占用。请退出后手动检查。", L"Cleanup ran, but some files may still be in use. Please check manually after exit."),
                     L"FFKeyLock",
                     cleaned ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
-                DestroyWindow(hWnd);
+                QuitApplication();
             }
             return 0;
 
@@ -1537,11 +1685,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case IDM_CHECK_UPDATES:
-            ShowTrayNotification(L"FFKeyLock", Text(L"当前版本暂无在线更新检查。", L"Online update checks are not available in this build."));
+            OpenLatestReleasePage(hWnd);
             return 0;
 
         case IDM_GITHUB_PROJECT:
-            ShellExecuteW(hWnd, L"open", L"https://github.com/", nullptr, nullptr, SW_SHOWNORMAL);
+            OpenExternalUrl(hWnd, kGitHubProjectUrl);
             return 0;
 
         case IDM_SHOW_SETTINGS:
@@ -1588,7 +1736,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case IDM_ADD_CURRENT_GAME:
+            if (!g_trayAddCurrentRequested)
+            {
+                return 0;
+            }
+            AddProgramAsGame(GetCommandTargetWindow());
+            UpdateMainWindow();
+            return 0;
+
         case IDC_ADD_GAME_BUTTON:
+            if (reinterpret_cast<HWND>(lParam) != g_contentPanel)
+            {
+                return 0;
+            }
             AddProgramAsGame(GetCommandTargetWindow());
             UpdateMainWindow();
             return 0;
@@ -1690,14 +1850,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case IDM_EXIT:
-            RoundedMenu::CloseAll();
-            g_menuBarOpenIndex = -1;
-            DestroyWindow(hWnd);
+            QuitApplication();
             return 0;
         }
         break;
 
     case WM_CLOSE:
+        if (g_isQuitting)
+        {
+            DestroyWindow(hWnd);
+            return 0;
+        }
         RoundedMenu::CloseAll();
         g_menuBarOpenIndex = -1;
         InvalidateWindow(g_menuBar);
@@ -1892,7 +2055,7 @@ void UpdateMainWindow()
     }
     if (g_addCurrentButton)
     {
-        SetWindowTextW(g_addCurrentButton, Text(L"添加程序", L"Add program"));
+        SetWindowTextW(g_addCurrentButton, Text(L"添加当前程序", L"Add current program"));
     }
     if (g_browseProtectedButton)
     {
@@ -1923,36 +2086,66 @@ void ShowMainWindow()
 
 void RememberExternalForegroundWindow(HWND hwnd)
 {
-    if (hwnd && !IsOwnWindow(hwnd))
+    if (IsAddableExternalWindow(hwnd))
     {
-        g_lastExternalForegroundWindow = hwnd;
+        g_lastExternalForegroundWindow = GetAncestor(hwnd, GA_ROOT);
     }
 }
 
 HWND GetCommandTargetWindow()
 {
-    if (IsWindow(g_menuTargetWindow) && !IsOwnWindow(g_menuTargetWindow))
+    if (IsAddableExternalWindow(g_menuTargetWindow))
     {
-        return g_menuTargetWindow;
-    }
-
-    if (IsWindow(g_lastExternalForegroundWindow))
-    {
-        return g_lastExternalForegroundWindow;
+        return GetAncestor(g_menuTargetWindow, GA_ROOT);
     }
 
     HWND foregroundWindow = GetForegroundWindow();
-    return IsOwnWindow(foregroundWindow) ? nullptr : foregroundWindow;
+    if (IsAddableExternalWindow(foregroundWindow))
+    {
+        return GetAncestor(foregroundWindow, GA_ROOT);
+    }
+
+    if (IsAddableExternalWindow(g_lastExternalForegroundWindow))
+    {
+        return GetAncestor(g_lastExternalForegroundWindow, GA_ROOT);
+    }
+
+    return FindRecentAddableExternalWindow();
 }
 
 void ShowTrayMenu()
 {
-    g_menuTargetWindow = GetForegroundWindow();
-    RememberExternalForegroundWindow(g_menuTargetWindow);
+    const HWND foregroundWindow = GetForegroundWindow();
+    RememberExternalForegroundWindow(foregroundWindow);
+    g_menuTargetWindow = IsAddableExternalWindow(foregroundWindow) ? GetAncestor(foregroundWindow, GA_ROOT) : FindRecentAddableExternalWindow();
+    if (!g_menuTargetWindow)
+    {
+        g_menuTargetWindow = g_lastExternalForegroundWindow;
+    }
 
     POINT roundedPoint{};
     GetCursorPos(&roundedPoint);
-    RoundedMenu::ShowAndDispatch(g_hWnd, roundedPoint, BuildTrayMenu(), true, false);
+    const UINT command = RoundedMenu::Show(g_hWnd, roundedPoint, BuildTrayMenu(), true, false);
+    if (!command)
+    {
+        return;
+    }
+
+    if (command == IDM_EXIT)
+    {
+        QuitApplication();
+        return;
+    }
+
+    if (command == IDM_ADD_CURRENT_GAME)
+    {
+        g_trayAddCurrentRequested = true;
+        SendMessageW(g_hWnd, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+        g_trayAddCurrentRequested = false;
+        return;
+    }
+
+    SendMessageW(g_hWnd, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
 ATOM RegisterMainWindowClass(HINSTANCE hInstance)

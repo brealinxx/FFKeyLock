@@ -20,6 +20,27 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Install ARM64 C++ tools
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio was not found."
+          }
+
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          & $installer modify `
+            --installPath $vsPath `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
+            --quiet `
+            --norestart `
+            --nocache `
+            --wait
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+            throw "Failed to install ARM64 C++ tools. Exit code: $LASTEXITCODE"
+          }
+
       - name: Resolve version
         id: version
         shell: pwsh
@@ -27,8 +48,16 @@ jobs:
           $version = "${{ github.ref_name }}".TrimStart("v")
           "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Build Release x64
-        run: msbuild FFKeyLock.slnx /t:Rebuild /p:Configuration=Release /p:Platform=x64 /m
+      - name: Build Release executables
+        shell: pwsh
+        run: |
+          $platforms = @("x64", "Win32", "ARM64")
+          foreach ($platform in $platforms) {
+            msbuild FFKeyLock.slnx /t:Rebuild /p:Configuration=Release /p:Platform=$platform /m
+            if ($LASTEXITCODE -ne 0) {
+              throw "Build failed for $platform."
+            }
+          }
 
       - name: Verify runtime dependencies
         shell: pwsh
@@ -46,88 +75,121 @@ jobs:
             throw "dumpbin.exe was not found."
           }
 
-          $deps = & $dumpbin.FullName /DEPENDENTS x64\Release\FFKeyLock.exe
-          $deps | Out-String | Write-Host
+          $executables = @(
+            "x64\Release\FFKeyLock.exe",
+            "Release\FFKeyLock.exe",
+            "ARM64\Release\FFKeyLock.exe"
+          )
 
-          $forbidden = $deps | Select-String -Pattern "MSVCP|VCRUNTIME|api-ms-win-crt"
-          if ($forbidden) {
-            throw "Release executable depends on VC++ runtime DLLs. Build must use the static runtime (/MT)."
+          foreach ($exe in $executables) {
+            $deps = & $dumpbin.FullName /DEPENDENTS $exe
+            $deps | Out-String | Write-Host
+
+            $forbidden = $deps | Select-String -Pattern "MSVCP|VCRUNTIME|api-ms-win-crt"
+            if ($forbidden) {
+              throw "$exe depends on VC++ runtime DLLs. Build must use the static runtime (/MT)."
+            }
           }
 
       - name: Smoke test executable startup
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath "$PWD\x64\Release\FFKeyLock.exe" -PassThru
-          Start-Sleep -Seconds 3
-          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
-          if (-not $running) {
-            throw "FFKeyLock.exe exited immediately during startup smoke test."
+          $executables = @(
+            "x64\Release\FFKeyLock.exe",
+            "Release\FFKeyLock.exe"
+          )
+
+          foreach ($exe in $executables) {
+            $process = Start-Process -FilePath "$PWD\$exe" -PassThru
+            Start-Sleep -Seconds 3
+            $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if (-not $running) {
+              throw "$exe exited immediately during startup smoke test."
+            }
+            Stop-Process -Id $process.Id -Force
           }
-          Stop-Process -Id $process.Id -Force
 
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build installer
+      - name: Build installers
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc installer\FFKeyLock.iss /DAppVersion=${{ steps.version.outputs.version }}
+          $version = "${{ steps.version.outputs.version }}"
+          foreach ($arch in @("x64", "x86", "arm64")) {
+            & $iscc installer\FFKeyLock.iss /DAppVersion=$version /DAppArchitecture=$arch
+            if ($LASTEXITCODE -ne 0) {
+              throw "Installer build failed for $arch."
+            }
+          }
 
       - name: Verify installer output
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $installer = "installer\output\FFKeyLock-Setup-v$version.exe"
-          if (-not (Test-Path $installer)) {
-            throw "Installer was not generated: $installer"
+          foreach ($arch in @("x64", "x86", "arm64")) {
+            $installer = "installer\output\FFKeyLock-Setup-v$version-$arch.exe"
+            if (-not (Test-Path $installer)) {
+              throw "Installer was not generated: $installer"
+            }
+            Get-Item $installer | Format-List FullName,Length,LastWriteTime
           }
-          Get-Item $installer | Format-List FullName,Length,LastWriteTime
 
       - name: Smoke test installed executable
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $installer = "$PWD\installer\output\FFKeyLock-Setup-v$version.exe"
-          $installDir = Join-Path $env:RUNNER_TEMP "FFKeyLockInstallSmoke"
+          foreach ($arch in @("x64", "x86")) {
+            $installer = "$PWD\installer\output\FFKeyLock-Setup-v$version-$arch.exe"
+            $installDir = Join-Path $env:RUNNER_TEMP "FFKeyLockInstallSmoke-$arch"
 
-          if (Test-Path $installDir) {
-            Remove-Item -LiteralPath $installDir -Recurse -Force
+            if (Test-Path $installDir) {
+              Remove-Item -LiteralPath $installDir -Recurse -Force
+            }
+
+            $setup = Start-Process -FilePath $installer `
+              -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LANG=english", "/DIR=$installDir") `
+              -Wait `
+              -PassThru
+
+            if ($setup.ExitCode -ne 0) {
+              throw "$arch installer smoke install failed with exit code $($setup.ExitCode)."
+            }
+
+            $exe = Join-Path $installDir "FFKeyLock.exe"
+            if (-not (Test-Path $exe)) {
+              throw "Installed executable was not found: $exe"
+            }
+
+            $process = Start-Process -FilePath $exe -PassThru
+            Start-Sleep -Seconds 3
+            $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if (-not $running) {
+              throw "Installed FFKeyLock.exe exited immediately during installer smoke test."
+            }
+            Stop-Process -Id $process.Id -Force
           }
 
-          $setup = Start-Process -FilePath $installer `
-            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LANG=english", "/DIR=$installDir") `
-            -Wait `
-            -PassThru
-
-          if ($setup.ExitCode -ne 0) {
-            throw "Installer smoke install failed with exit code $($setup.ExitCode)."
-          }
-
-          $exe = Join-Path $installDir "FFKeyLock.exe"
-          if (-not (Test-Path $exe)) {
-            throw "Installed executable was not found: $exe"
-          }
-
-          $process = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 3
-          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
-          if (-not $running) {
-            throw "Installed FFKeyLock.exe exited immediately during installer smoke test."
-          }
-          Stop-Process -Id $process.Id -Force
-
-      - name: Create portable package
+      - name: Create portable packages
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $packageRoot = "dist\FFKeyLock-v$version-x64"
-          New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
-          Copy-Item x64\Release\FFKeyLock.exe $packageRoot\
-          Copy-Item FFKeyLock\FFKeyLock.ico $packageRoot\
-          Copy-Item README.md,README.zh-CN.md,CHANGELOG.md,CHANGELOG-en.md,LICENSE $packageRoot\
-          Compress-Archive -Path $packageRoot -DestinationPath "dist\FFKeyLock-v$version-x64.zip" -Force
+          $packages = @(
+            @{ Arch = "x64"; Source = "x64\Release\FFKeyLock.exe" },
+            @{ Arch = "x86"; Source = "Release\FFKeyLock.exe" },
+            @{ Arch = "arm64"; Source = "ARM64\Release\FFKeyLock.exe" }
+          )
+
+          foreach ($package in $packages) {
+            $packageRoot = "dist\FFKeyLock-v$version-$($package.Arch)"
+            New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
+            Copy-Item $package.Source $packageRoot\
+            Copy-Item FFKeyLock\FFKeyLock.ico $packageRoot\
+            Copy-Item README.md,README.zh-CN.md,CHANGELOG.md,CHANGELOG-en.md,LICENSE $packageRoot\
+            Compress-Archive -Path $packageRoot -DestinationPath "dist\FFKeyLock-v$version-$($package.Arch).zip" -Force
+          }
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -135,5 +197,9 @@ jobs:
           name: FFKeyLock ${{ github.ref_name }}
           fail_on_unmatched_files: true
           files: |
-            installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}.exe
+            installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}-x64.exe
+            installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}-x86.exe
+            installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}-arm64.exe
             dist/FFKeyLock-v${{ steps.version.outputs.version }}-x64.zip
+            dist/FFKeyLock-v${{ steps.version.outputs.version }}-x86.zip
+            dist/FFKeyLock-v${{ steps.version.outputs.version }}-arm64.zip

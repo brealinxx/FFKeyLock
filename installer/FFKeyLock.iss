@@ -1,5 +1,17 @@
 #ifndef AppVersion
-#define AppVersion "0.3.0"
+#define AppVersion "0.4.0"
+#endif
+
+#ifndef AppArchitecture
+#define AppArchitecture "x64"
+#endif
+
+#if AppArchitecture == "x86"
+#define SourceExePath "..\Release\FFKeyLock.exe"
+#elif AppArchitecture == "arm64"
+#define SourceExePath "..\ARM64\Release\FFKeyLock.exe"
+#else
+#define SourceExePath "..\x64\Release\FFKeyLock.exe"
 #endif
 
 #define AppName "FFKeyLock"
@@ -17,13 +29,18 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=output
-OutputBaseFilename=FFKeyLock-Setup-v{#AppVersion}
+OutputBaseFilename=FFKeyLock-Setup-v{#AppVersion}-{#AppArchitecture}
 SetupIconFile=..\FFKeyLock\FFKeyLock.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+#if AppArchitecture == "x64"
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+#elif AppArchitecture == "arm64"
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
+#endif
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#AppExeName}
 VersionInfoVersion={#AppVersion}
@@ -55,7 +72,7 @@ chinesesimp.AdditionalIconTasks=附加图标：
 chinesesimp.LaunchApp=启动 %1
 
 [Files]
-Source: "..\x64\Release\FFKeyLock.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceExePath}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\FFKeyLock\FFKeyLock.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.zh-CN.md"; DestDir: "{app}"; Flags: ignoreversion
