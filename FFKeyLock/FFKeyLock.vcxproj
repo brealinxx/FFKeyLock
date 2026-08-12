@@ -120,6 +120,7 @@
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <AdditionalManifestFiles>FFKeyLock.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -140,6 +141,7 @@
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <AdditionalManifestFiles>FFKeyLock.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -157,6 +159,7 @@
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <AdditionalManifestFiles>FFKeyLock.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -177,6 +180,7 @@
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <AdditionalManifestFiles>FFKeyLock.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
@@ -194,6 +198,7 @@
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <AdditionalManifestFiles>FFKeyLock.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
@@ -214,6 +219,7 @@
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <AdditionalManifestFiles>FFKeyLock.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -242,6 +248,7 @@
     <ClInclude Include="UI\Main\MainContentView.h" />
     <ClInclude Include="UI\Menu\RoundedMenu.h" />
     <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramCommands.h" />
+    <ClInclude Include="UI\ProtectedPrograms\GameProfileDialog.h" />
     <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramListView.h" />
     <ClInclude Include="WindowsKeyGuard.h" />
   </ItemGroup>
@@ -267,6 +274,7 @@
     <ClCompile Include="UI\Main\MainContentView.cpp" />
     <ClCompile Include="UI\Menu\RoundedMenu.cpp" />
     <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramCommands.cpp" />
+    <ClCompile Include="UI\ProtectedPrograms\GameProfileDialog.cpp" />
     <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramListView.cpp" />
     <ClCompile Include="WindowsKeyGuard.cpp" />
   </ItemGroup>

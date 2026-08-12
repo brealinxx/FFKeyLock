@@ -13,6 +13,7 @@
 #include "UI/Main/MainContentView.h"
 #include "UI/Menu/RoundedMenu.h"
 #include "UI/ProtectedPrograms/ProtectedProgramCommands.h"
+#include "UI/ProtectedPrograms/GameProfileDialog.h"
 #include "UI/ProtectedPrograms/ProtectedProgramListView.h"
 #include "ThemeManager.h"
 #include "TrayIcon.h"
@@ -52,6 +53,7 @@ int g_menuBarOpenIndex = -1;
 bool g_menuBarMouseTracking = false;
 bool g_isQuitting = false;
 bool g_trayAddCurrentRequested = false;
+bool g_startupEnabled = false;
 int g_scrollY = 0;
 int g_contentHeight = 0;
 
@@ -63,6 +65,7 @@ struct UiButton
     bool hot = false;
     bool pressed = false;
     bool enabled = true;
+    bool active = false;
 };
 
 struct ContentLayout
@@ -251,6 +254,18 @@ std::vector<RoundedMenuItem> BuildLanguageMenu()
     };
 }
 
+std::vector<RoundedMenuItem> BuildWindowsKeyScopeMenu()
+{
+    return {
+        MenuItem(IDM_WINKEY_SCOPE_PROTECTED,
+            Text(L"仅受保护程序在前台时", L"Protected foreground only"), L"",
+            g_windowsKeyGuardScope == WindowsKeyGuardScope::ProtectedForeground),
+        MenuItem(IDM_WINKEY_SCOPE_ALWAYS,
+            Text(L"始终锁定（高级）", L"Always lock (advanced)"), L"",
+            g_windowsKeyGuardScope == WindowsKeyGuardScope::Always),
+    };
+}
+
 std::vector<RoundedMenuItem> BuildSettingsMenu()
 {
     return {
@@ -259,6 +274,7 @@ std::vector<RoundedMenuItem> BuildSettingsMenu()
         MenuItem(IDM_OPEN_CONFIG_DIR, Text(L"打开配置目录", L"Open config directory")),
         MenuItem(IDM_OPEN_LOG_DIR, Text(L"打开日志目录", L"Open log directory")),
         MenuItem(IDM_STARTUP, Text(L"开机启动", L"Startup"), L"", IsStartupEnabled()),
+        MenuSubmenu(Text(L"Win 键锁定范围", L"Windows key lock scope"), BuildWindowsKeyScopeMenu()),
         MenuSeparator(),
         MenuItem(IDM_RESET_CONFIG, Text(L"重置配置", L"Reset config")),
         MenuItem(IDM_CLEAR_LOCAL_DATA, Text(L"删除本地数据及注册表", L"Delete local data and registry")),
@@ -574,6 +590,25 @@ void CreateMenuBar(HWND parent)
         nullptr);
 }
 
+bool EffectiveWindowsKeyLock()
+{
+    if (g_windowsKeyGuardScope == WindowsKeyGuardScope::Always)
+    {
+        return g_windowsKeyGuardEnabled;
+    }
+    return g_inGameProtection && !g_activeGameExeName.empty() &&
+        GetGameProfileForExe(g_activeGameExeName).lockWindowsKey;
+}
+
+std::wstring WindowsKeyStatusText()
+{
+    std::wstring status = EffectiveWindowsKeyLock() ? Text(L"已开启", L"On") : Text(L"未开启", L"Off");
+    status += g_windowsKeyGuardScope == WindowsKeyGuardScope::Always
+        ? Text(L" · 始终", L" · Always")
+        : Text(L" · 仅游戏前台", L" · Game foreground only");
+    return status;
+}
+
 std::wstring BuildStatusText()
 {
     std::wstring status = Text(L"当前状态：", L"Status: ");
@@ -590,7 +625,7 @@ std::wstring BuildStatusText()
     status += Text(L"    自动检测：", L"    Auto detect: ");
     status += g_autoDetectEnabled ? Text(L"开启", L"On") : Text(L"关闭", L"Off");
     status += Text(L"    Win 键：", L"    Windows key: ");
-    status += g_windowsKeyGuardEnabled ? Text(L"禁用", L"Disabled") : Text(L"开启", L"Enabled");
+    status += WindowsKeyStatusText();
     return status;
 }
 
@@ -685,7 +720,7 @@ void DrawPanelText(HDC hdc, const std::wstring& text, RECT rect, COLORREF color,
     DrawTextW(hdc, text.c_str(), -1, &rect, format);
 }
 
-int MeasureUiTextWidth(HWND hwnd, const std::wstring& text)
+int MeasureTitleTextWidth(HWND hwnd, const std::wstring& text)
 {
     HDC hdc = GetDC(hwnd);
     if (!hdc)
@@ -693,7 +728,7 @@ int MeasureUiTextWidth(HWND hwnd, const std::wstring& text)
         return Scale(120);
     }
 
-    GdiUtils::SelectObjectScope fontScope(hdc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
+    GdiUtils::SelectObjectScope fontScope(hdc, ThemeManager::TitleFont() ? ThemeManager::TitleFont() : GetStockObject(DEFAULT_GUI_FONT));
     SIZE size{};
     GetTextExtentPoint32W(hdc, text.c_str(), static_cast<int>(text.size()), &size);
     ReleaseDC(hwnd, hdc);
@@ -708,13 +743,14 @@ UiButton* FindContentButton(int id)
     return it == g_contentButtons.end() ? nullptr : &(*it);
 }
 
-void AddContentButton(int id, const RECT& rect, const std::wstring& text, bool enabled = true)
+void AddContentButton(int id, const RECT& rect, const std::wstring& text, bool enabled = true, bool active = false)
 {
     UiButton button{};
     button.id = id;
     button.rect = rect;
     button.text = text;
     button.enabled = enabled;
+    button.active = active;
     if (const UiButton* oldButton = FindContentButton(id))
     {
         button.hot = oldButton->hot;
@@ -726,7 +762,11 @@ void AddContentButton(int id, const RECT& rect, const std::wstring& text, bool e
 void DrawPanelButton(HDC hdc, const UiButton& button, int scrollY)
 {
     RECT rect = VisualRect(button.rect, scrollY);
+    const bool active = button.active;
+    const bool primary = button.id == IDC_ADD_GAME_BUTTON;
     COLORREF fill = ThemeManager::ButtonColor();
+    COLORREF border = ThemeManager::BorderColor();
+    COLORREF textColor = button.enabled ? ThemeManager::TextColor() : ThemeManager::DisabledTextColor();
     if (!button.enabled)
     {
         fill = ThemeManager::SurfaceColor();
@@ -740,21 +780,77 @@ void DrawPanelButton(HDC hdc, const UiButton& button, int scrollY)
         fill = ThemeManager::ButtonHotColor();
     }
 
-    GdiUtils::FillRoundRect(hdc, rect, fill, ThemeManager::BorderColor(), Scale(7));
-    DrawPanelText(hdc, button.text, rect, button.enabled ? ThemeManager::TextColor() : ThemeManager::DisabledTextColor(),
+    if (button.enabled && (active || primary))
+    {
+        border = ThemeManager::AccentColor();
+        if (!button.pressed)
+        {
+            fill = ThemeManager::IsDark() ? RGB(39, 52, 29) : RGB(236, 247, 224);
+        }
+        if (active && !primary)
+        {
+            textColor = ThemeManager::AccentColor();
+        }
+    }
+    else if (button.enabled && button.hot)
+    {
+        border = ThemeManager::AccentColor();
+    }
+
+    if (button.pressed)
+    {
+        OffsetRect(&rect, 0, Scale(1));
+    }
+    else
+    {
+        RECT shadow = rect;
+        OffsetRect(&shadow, 0, Scale(1));
+        const COLORREF shadowColor = ThemeManager::IsDark() ? RGB(12, 13, 14) : RGB(221, 224, 226);
+        GdiUtils::FillRoundRect(hdc, shadow, shadowColor, shadowColor, Scale(9));
+    }
+
+    const int radius = button.id == IDC_GAME_LIST_HELP ? Scale(15) : Scale(9);
+    GdiUtils::FillRoundRect(hdc, rect, fill, border, radius);
+    DrawPanelText(hdc, button.text, rect, textColor,
         ThemeManager::UiFont(), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (g_contentPanel && GetFocus() == g_contentPanel &&
+        ContentPanel::FocusedButtonId(g_contentPanel) == button.id)
+    {
+        RECT focus = rect;
+        InflateRect(&focus, -Scale(3), -Scale(3));
+        HPEN focusPen = CreatePen(PS_SOLID, std::max(1, Scale(2)), ThemeManager::AccentColor());
+        HGDIOBJ oldPen = SelectObject(hdc, focusPen);
+        HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        RoundRect(hdc, focus.left, focus.top, focus.right, focus.bottom, Scale(8), Scale(8));
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
+        DeleteObject(focusPen);
+        DrawFocusRect(hdc, &focus);
+    }
 }
 
 void DrawCard(HDC hdc, const RECT& logicalRect, int scrollY, const std::wstring& title)
 {
     RECT rect = VisualRect(logicalRect, scrollY);
-    GdiUtils::FillRoundRect(hdc, rect, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(8));
+    RECT shadow = rect;
+    OffsetRect(&shadow, 0, Scale(2));
+    const COLORREF shadowColor = ThemeManager::IsDark() ? RGB(12, 13, 14) : RGB(223, 226, 228);
+    GdiUtils::FillRoundRect(hdc, shadow, shadowColor, shadowColor, Scale(12));
+    GdiUtils::FillRoundRect(hdc, rect, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(12));
     if (title.empty())
     {
         return;
     }
+
+    RECT accentRect{
+        rect.left + Scale(16),
+        rect.top + Scale(15),
+        rect.left + Scale(19),
+        rect.top + Scale(29)
+    };
+    GdiUtils::FillRoundRect(hdc, accentRect, ThemeManager::AccentColor(), ThemeManager::AccentColor(), Scale(2));
     RECT titleRect = rect;
-    titleRect.left += Scale(16);
+    titleRect.left += Scale(27);
     titleRect.right -= Scale(16);
     titleRect.top += Scale(10);
     titleRect.bottom = titleRect.top + Scale(24);
@@ -789,7 +885,7 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
     DrawPanelText(hdc, BuildPrimaryStatusText(), VisualRect(g_contentLayout.primaryStatus, scrollY), primaryStatusColor, ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, StatusLine(L"当前检测到：", L"Detected: ", detectedGame), VisualRect(g_contentLayout.detectedStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawPanelText(hdc, StatusLine(L"输入法状态：", L"Input language: ", inputLanguage), VisualRect(g_contentLayout.inputStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    DrawPanelText(hdc, StatusLine(L"Win 键锁定：", L"Win key lock: ", EnabledText(g_windowsKeyGuardEnabled)), VisualRect(g_contentLayout.winKeyStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    DrawPanelText(hdc, StatusLine(L"Win 键锁定：", L"Win key lock: ", WindowsKeyStatusText()), VisualRect(g_contentLayout.winKeyStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     DrawCard(hdc, g_contentLayout.featureCard, scrollY, Text(L"功能开关", L"Feature switches"));
     const int margin = Scale(24);
@@ -811,7 +907,7 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
         const int secondStateX = secondGroupX + featureLabelWidth + featureInlineGap;
         DrawFeatureRow(hdc, scrollY, firstGroupX, featureLabelWidth, firstStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
         DrawFeatureRow(hdc, scrollY, firstGroupX, featureLabelWidth, firstStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
-        DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"开机启动", L"Startup"), EnabledText(IsStartupEnabled()));
+        DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"开机启动", L"Startup"), EnabledText(g_startupEnabled));
         DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
     }
     else
@@ -820,11 +916,20 @@ void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
         const int stateX = groupX + featureLabelWidth + featureInlineGap;
         DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
         DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
-        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(122), Text(L"开机启动", L"Startup"), EnabledText(IsStartupEnabled()));
+        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(122), Text(L"开机启动", L"Startup"), EnabledText(g_startupEnabled));
         DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(166), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
     }
 
-    DrawCard(hdc, g_contentLayout.programsCard, scrollY, Text(L"受保护程序列表", L"Protected program list"));
+    DrawCard(hdc, g_contentLayout.programsCard, scrollY, L"");
+    RECT programAccent = VisualRect(RECT{
+        g_contentLayout.programsCard.left + Scale(16),
+        g_contentLayout.programsCard.top + Scale(15),
+        g_contentLayout.programsCard.left + Scale(19),
+        g_contentLayout.programsCard.top + Scale(29) }, scrollY);
+    GdiUtils::FillRoundRect(hdc, programAccent, ThemeManager::AccentColor(), ThemeManager::AccentColor(), Scale(2));
+    DrawPanelText(hdc, Text(L"受保护程序列表", L"Protected program list"),
+        VisualRect(g_contentLayout.programLabel, scrollY), ThemeManager::TextColor(),
+        ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     g_protectedProgramListView.Draw(hdc, scrollY);
 
@@ -934,7 +1039,7 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         const int featureY = statusY + statusHeight + groupSpacing;
         const int featureHeight = twoColumnFeatures ? Scale(126) : Scale(220);
         const int programsY = featureY + featureHeight + groupSpacing;
-        const int programsHeight = std::max(wideProgramActions ? Scale(250) : Scale(360), viewportHeight - programsY - margin);
+        const int programsHeight = std::max(wideProgramActions ? Scale(270) : Scale(392), viewportHeight - programsY - margin);
         g_contentHeight = programsY + programsHeight + margin;
         const int maxScroll = std::max(0, g_contentHeight - viewportHeight);
         g_scrollY = std::clamp(g_scrollY, 0, maxScroll);
@@ -960,10 +1065,10 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         const int listHeight = wideProgramActions ? std::max(Scale(128), programsHeight - Scale(74)) : Scale(160);
         const int actionButtonY = wideProgramActions ? listY : listY + listHeight + Scale(14);
         const int narrowActionWidth = std::max(Scale(120), (listWidth - buttonGap) / 2);
-        const int programsTitleX = margin + Scale(16);
-        const int programsTitleWidth = MeasureUiTextWidth(panel, Text(L"受保护程序列表", L"Protected program list"));
+        const int programsTitleX = margin + Scale(27);
+        const int programsTitleWidth = MeasureTitleTextWidth(panel, Text(L"受保护程序列表", L"Protected program list"));
         const int programsHelpX = std::min(
-            programsTitleX + programsTitleWidth + Scale(4),
+            programsTitleX + programsTitleWidth + Scale(10),
             groupRight - Scale(20) - Scale(28));
 
         g_contentLayout.icon = RECT{};
@@ -976,28 +1081,43 @@ int LayoutContentControls(HWND panel, int width, int height, int scrollY)
         g_contentLayout.winKeyStatus = RECT{ groupInnerLeft, statusY + Scale(124), groupRight - Scale(20), statusY + Scale(148) };
         g_contentLayout.featureCard = RECT{ margin, featureY, margin + contentWidth, featureY + featureHeight };
         g_contentLayout.programsCard = RECT{ margin, programsY, margin + contentWidth, programsY + programsHeight };
-        g_contentLayout.programLabel = RECT{ programsTitleX, programsY + Scale(10), programsHelpX, programsY + Scale(34) };
+        g_contentLayout.programLabel = RECT{ programsTitleX, programsY + Scale(10), programsHelpX - Scale(8), programsY + Scale(34) };
         g_contentLayout.contentHeight = g_contentHeight;
         g_protectedProgramListView.SetBounds(RECT{ listX, listY, listX + listWidth, listY + listHeight });
 
         g_contentButtons.clear();
-        AddContentButton(IDC_PROTECTION_BUTTON, RECT{ firstButtonX, featureY + Scale(28), firstButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled));
-        AddContentButton(IDC_AUTO_DETECT_BUTTON, RECT{ firstButtonX, featureY + Scale(72), firstButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_autoDetectEnabled));
+        AddContentButton(IDC_PROTECTION_BUTTON, RECT{ firstButtonX, featureY + Scale(28), firstButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled), true, g_protectionEnabled);
+        AddContentButton(IDC_AUTO_DETECT_BUTTON, RECT{ firstButtonX, featureY + Scale(72), firstButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_autoDetectEnabled), true, g_autoDetectEnabled);
         if (twoColumnFeatures)
         {
-            AddContentButton(IDC_STARTUP_BUTTON, RECT{ secondButtonX, featureY + Scale(28), secondButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
-            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ secondButtonX, featureY + Scale(72), secondButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
+            AddContentButton(IDC_STARTUP_BUTTON, RECT{ secondButtonX, featureY + Scale(28), secondButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_startupEnabled), true, g_startupEnabled);
+            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ secondButtonX, featureY + Scale(72), secondButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled), true, g_windowsKeyGuardEnabled);
         }
         else
         {
-            AddContentButton(IDC_STARTUP_BUTTON, RECT{ firstButtonX, featureY + Scale(116), firstButtonX + switchButtonWidth, featureY + Scale(116) + buttonHeight }, SwitchActionText(IsStartupEnabled()));
-            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ firstButtonX, featureY + Scale(160), firstButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled));
+            AddContentButton(IDC_STARTUP_BUTTON, RECT{ firstButtonX, featureY + Scale(116), firstButtonX + switchButtonWidth, featureY + Scale(116) + buttonHeight }, SwitchActionText(g_startupEnabled), true, g_startupEnabled);
+            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ firstButtonX, featureY + Scale(160), firstButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled), true, g_windowsKeyGuardEnabled);
         }
         AddContentButton(IDC_GAME_LIST_HELP, RECT{ programsHelpX, programsY + Scale(8), programsHelpX + Scale(28), programsY + Scale(36) }, L"?");
-        AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加当前程序", L"Add current program"));
-        AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ actionButtonX, listY + Scale(42), actionButtonX + actionButtonWidth, listY + Scale(42) + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
-        AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + Scale(84), actionButtonX + actionButtonWidth, listY + Scale(84) + buttonHeight }, Text(L"从文件选择", L"Choose file"));
-        AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ actionButtonX, listY + Scale(126), actionButtonX + actionButtonWidth, listY + Scale(126) + buttonHeight }, Text(L"删除选中", L"Delete selected"));
+        if (wideProgramActions)
+        {
+            const int actionStep = Scale(39);
+            AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加当前程序", L"Add current program"));
+            AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ actionButtonX, listY + actionStep, actionButtonX + actionButtonWidth, listY + actionStep + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
+            AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + actionStep * 2, actionButtonX + actionButtonWidth, listY + actionStep * 2 + buttonHeight }, Text(L"从文件选择", L"Choose file"));
+            AddContentButton(IDC_EDIT_GAME_PROFILE_BUTTON, RECT{ actionButtonX, listY + actionStep * 3, actionButtonX + actionButtonWidth, listY + actionStep * 3 + buttonHeight }, Text(L"游戏独立配置", L"Game profile"));
+            AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ actionButtonX, listY + actionStep * 4, actionButtonX + actionButtonWidth, listY + actionStep * 4 + buttonHeight }, Text(L"删除选中", L"Delete selected"));
+        }
+        else
+        {
+            const int secondActionX = listX + narrowActionWidth + buttonGap;
+            const int actionStep = Scale(40);
+            AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ listX, actionButtonY, listX + narrowActionWidth, actionButtonY + buttonHeight }, Text(L"添加当前程序", L"Add current program"));
+            AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ secondActionX, actionButtonY, secondActionX + narrowActionWidth, actionButtonY + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
+            AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ listX, actionButtonY + actionStep, listX + narrowActionWidth, actionButtonY + actionStep + buttonHeight }, Text(L"从文件选择", L"Choose file"));
+            AddContentButton(IDC_EDIT_GAME_PROFILE_BUTTON, RECT{ secondActionX, actionButtonY + actionStep, secondActionX + narrowActionWidth, actionButtonY + actionStep + buttonHeight }, Text(L"游戏独立配置", L"Game profile"));
+            AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ listX, actionButtonY + actionStep * 2, listX + narrowActionWidth, actionButtonY + actionStep * 2 + buttonHeight }, Text(L"删除选中", L"Delete selected"));
+        }
 
         g_protectedProgramListView.Refresh();
         return g_contentHeight;
@@ -1162,6 +1282,83 @@ void DeleteSelectedGame()
     g_protectedProgramListView.DeleteSelected();
     RefreshGameList();
 }
+
+int NavigateContentPanelButton(HWND, int currentId, int direction)
+{
+    if (g_contentButtons.empty())
+    {
+        return 0;
+    }
+    int currentIndex = -1;
+    for (int index = 0; index < static_cast<int>(g_contentButtons.size()); ++index)
+    {
+        if (g_contentButtons[index].id == currentId)
+        {
+            currentIndex = index;
+            break;
+        }
+    }
+    const int step = direction < 0 ? -1 : 1;
+    if (currentIndex < 0 && step < 0)
+    {
+        currentIndex = 0;
+    }
+    for (int offset = 1; offset <= static_cast<int>(g_contentButtons.size()); ++offset)
+    {
+        const int index = (currentIndex + step * offset +
+            static_cast<int>(g_contentButtons.size()) * 2) % static_cast<int>(g_contentButtons.size());
+        if (g_contentButtons[index].enabled)
+        {
+            const int nextId = g_contentButtons[index].id;
+            if (g_contentPanel)
+            {
+                RECT client{};
+                GetClientRect(g_contentPanel, &client);
+                const int currentScroll = ContentPanel::ScrollY(g_contentPanel);
+                const RECT bounds = g_contentButtons[index].rect;
+                if (bounds.top < currentScroll + Scale(8))
+                {
+                    ContentPanel::SetScrollY(g_contentPanel,
+                        static_cast<int>(std::max<LONG>(0, bounds.top - Scale(8))));
+                }
+                else if (bounds.bottom > currentScroll + client.bottom - Scale(8))
+                {
+                    ContentPanel::SetScrollY(g_contentPanel,
+                        bounds.bottom - client.bottom + Scale(8));
+                }
+            }
+            return nextId;
+        }
+    }
+    return 0;
+}
+
+std::wstring ContentPanelButtonAccessibleText(HWND, int id)
+{
+    const UiButton* button = FindContentButton(id);
+    return button ? button->text + Text(L"，按钮", L", button") : std::wstring{};
+}
+
+void EditSelectedGameProfile()
+{
+    const std::wstring exeName = GetSelectedGameName();
+    if (exeName.empty())
+    {
+        MessageBoxW(g_hWnd,
+            Text(L"请先选择一个受保护程序。", L"Select a protected program first."),
+            L"FFKeyLock", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    const GameProfile current = GetGameProfileForExe(exeName);
+    GameProfile updated{};
+    if (GameProfileDialog::Show(g_hWnd, exeName, current, updated))
+    {
+        SetGameProfileForExe(exeName, std::move(updated));
+        RefreshGameList();
+    }
+}
+
 void CopyTextToClipboard(const std::wstring& text)
 {
     ProtectedProgramCommands::CopyNameToClipboard(g_hWnd, text);
@@ -1432,6 +1629,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     }
 
+    if (message == WM_GAME_CHAT_KEY)
+    {
+        HandleGameChatKey(static_cast<UINT>(wParam), lParam != 0);
+        return 0;
+    }
+
+    if (message == WM_FOREGROUND_CHANGED)
+    {
+        DetectForegroundGame();
+        return 0;
+    }
+
     switch (message)
     {
     case WM_CREATE:
@@ -1447,6 +1656,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         ContentPanel::SetEnsureLayoutCallback(g_contentPanel, EnsureContentPanelLayoutForHitTest);
         ContentPanel::SetButtonHitTestCallback(g_contentPanel, HitTestContentPanelButton);
         ContentPanel::SetButtonStateCallback(g_contentPanel, SetContentButtonState);
+        ContentPanel::SetButtonNavigateCallback(g_contentPanel, NavigateContentPanelButton);
+        ContentPanel::SetButtonAccessibleTextCallback(g_contentPanel, ContentPanelButtonAccessibleText);
         ContentPanel::SetMouseDownCallback(g_contentPanel, ContentPanelMouseDown);
         ContentPanel::SetMouseClickCallback(g_contentPanel, ContentPanelClicked);
         ContentPanel::SetRightClickCallback(g_contentPanel, ContentPanelRightClicked);
@@ -1460,13 +1671,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         ContentPanel::Relayout(g_contentPanel);
         ThemeManager::ApplyTheme(hWnd);
-        SetTimer(hWnd, TIMER_GAME_DETECT, DETECT_INTERVAL_MS, nullptr);
+        {
+            const bool eventDrivenDetection = InitializeForegroundDetection();
+            SetTimer(hWnd, TIMER_GAME_DETECT,
+                eventDrivenDetection ? DETECT_FALLBACK_INTERVAL_MS : DETECT_RECOVERY_INTERVAL_MS,
+                nullptr);
+            DetectForegroundGame();
+        }
         return 0;
 
     case WM_TIMER:
         if (wParam == TIMER_GAME_DETECT)
         {
             DetectForegroundGame();
+        }
+        else if (wParam == TIMER_CHAT_TIMEOUT)
+        {
+            ResumeGameProtectionAfterChatTimeout();
         }
         return 0;
 
@@ -1635,10 +1856,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 g_protectionEnabled = true;
                 g_autoDetectEnabled = true;
                 g_windowsKeyGuardEnabled = false;
+                g_windowsKeyGuardScope = WindowsKeyGuardScope::ProtectedForeground;
                 g_notificationsEnabled = true;
                 g_overlayNotificationsEnabled = true;
                 g_gameExeNames.clear();
                 g_gameExePaths.clear();
+                g_gameProfiles.clear();
                 LeaveGameProtection();
                 SaveConfig();
                 UpdateMainWindow();
@@ -1764,6 +1987,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             UpdateMainWindow();
             return 0;
 
+        case IDM_EDIT_GAME_PROFILE:
+        case IDC_EDIT_GAME_PROFILE_BUTTON:
+            EditSelectedGameProfile();
+            return 0;
+
         case IDM_COPY_GAME_NAME:
             CopyTextToClipboard(GetSelectedGameName());
             return 0;
@@ -1803,6 +2031,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDM_WINDOWS_KEY_GUARD:
         case IDC_WINDOWS_KEY_BUTTON:
             ToggleWindowsKeyGuard();
+            return 0;
+
+        case IDM_WINKEY_SCOPE_PROTECTED:
+            g_windowsKeyGuardScope = WindowsKeyGuardScope::ProtectedForeground;
+            ApplyWindowsKeyGuard();
+            SaveConfig();
+            UpdateMainWindow();
+            return 0;
+
+        case IDM_WINKEY_SCOPE_ALWAYS:
+            g_windowsKeyGuardScope = WindowsKeyGuardScope::Always;
+            ApplyWindowsKeyGuard();
+            SaveConfig();
+            UpdateMainWindow();
             return 0;
 
         case IDM_LANGUAGE_CHINESE:
@@ -1870,6 +2112,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_DESTROY:
         KillTimer(hWnd, TIMER_GAME_DETECT);
+        KillTimer(hWnd, TIMER_CHAT_TIMEOUT);
+        ShutdownForegroundDetection();
         if (g_protectedBrowserWindow)
         {
             DestroyWindow(g_protectedBrowserWindow);
@@ -1889,6 +2133,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 void UpdateMainWindow()
 {
+    g_startupEnabled = IsStartupEnabled();
     if (g_hWnd)
     {
         SetWindowTextW(g_hWnd, kAppName);
@@ -1911,7 +2156,7 @@ void UpdateMainWindow()
     }
     if (g_startupButton)
     {
-        SetWindowTextW(g_startupButton, IsStartupEnabled() ? Text(L"关闭开机启动", L"Disable startup") : Text(L"开启开机启动", L"Enable startup"));
+        SetWindowTextW(g_startupButton, g_startupEnabled ? Text(L"关闭开机启动", L"Disable startup") : Text(L"开启开机启动", L"Enable startup"));
     }
     if (g_windowsKeyButton)
     {
@@ -1986,7 +2231,7 @@ void UpdateMainWindow()
     }
     if (g_statusWinKeyText)
     {
-        SetWindowTextW(g_statusWinKeyText, StatusLine(L"Win 键锁定：", L"Win key lock: ", EnabledText(g_windowsKeyGuardEnabled)).c_str());
+        SetWindowTextW(g_statusWinKeyText, StatusLine(L"Win 键锁定：", L"Win key lock: ", WindowsKeyStatusText()).c_str());
     }
     if (g_protectionLabel)
     {
@@ -2012,7 +2257,7 @@ void UpdateMainWindow()
     {
         SetWindowTextW(g_autoDetectButton, SwitchActionText(g_autoDetectEnabled).c_str());
     }
-    const bool startupEnabled = IsStartupEnabled();
+    const bool startupEnabled = g_startupEnabled;
     if (g_startupLabel)
     {
         SetWindowTextW(g_startupLabel, Text(L"开机启动", L"Startup"));

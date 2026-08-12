@@ -1,7 +1,7 @@
 # FFKeyLock
 
 
-FFKeyLock is a lightweight Windows tray utility for keeping game input reliable. It watches the foreground window, detects configured protected executables, and switches the input language to English while a protected program is active.
+FFKeyLock is a lightweight Windows tray utility for keeping game input reliable. It listens for foreground-window changes, applies a dedicated profile to each protected executable, and restores the previous input language after the game loses focus.
 
 [简体中文](README.zh-CN.md)
 
@@ -17,17 +17,22 @@ FFKeyLock is a lightweight Windows tray utility for keeping game input reliable.
 
 ## Why It Is Lightweight
 
-FFKeyLock is built directly on Win32 without a browser runtime, managed framework, or background service. It runs as a small tray app, stores settings in a simple config file, and only polls the foreground window at a short interval for program detection.
+FFKeyLock is built directly on Win32 without a browser runtime, managed framework, or background service. Foreground detection is event-driven through `SetWinEventHook`, with only a low-frequency fallback timer, so the app remains responsive without continuously polling while idle.
 
 ## Main Features
 
-- Protects game sessions by switching the active input language to English.
-- Disables or enables the Windows key to prevent accidental interruptions while gaming.
+- Gives every protected executable its own target input language, chat keys, chat mode, restore timeout, Windows-key behavior, and notification preference.
+- Uses event-driven foreground detection for faster response and lower idle overhead.
+- Supports customizable chat keys such as Enter, T, Y, and `/`.
+- Supports toggle-to-chat and hold-to-chat modes, with Enter/Esc restoration and per-game timeout fallback.
+- Locks the Windows key only while a protected program is in the foreground by default, with an advanced always-lock scope.
 - Restores the previous input language after leaving a protected program window.
 - Automatically detects known executables from a configurable protected program list.
 - Lets you add the current foreground program or browse for an `.exe` file.
 - Provides a protected program list with selection, scrolling, right-click actions, and folder opening.
 - Provides quick tray controls for protection, auto detection, startup, notifications, and input switching.
+- Provides a modern NVIDIA-inspired overlay positioned above native Windows toast notifications.
+- Supports keyboard navigation for custom controls and respects the Windows reduced-animation setting.
 - Supports Chinese and English UI text from `Settings -> Language`.
 - Can start with Windows for always-on protection.
 
@@ -36,7 +41,7 @@ FFKeyLock is built directly on Win32 without a browser runtime, managed framewor
 Download the latest installer from [GitHub Releases](https://github.com/brealinxx/FFKeyLock/releases/latest):
 
 ```text
-FFKeyLock-Setup.exe
+FFKeyLock-Setup-v0.5.0-x64.exe
 ```
 
 ## Build
@@ -77,7 +82,7 @@ User settings are stored in:
 %APPDATA%\FFKeyLock\config.ini
 ```
 
-The config includes protection state, auto-detection state, UI language, theme, notification options, and the protected executable list.
+The config includes global protection settings, Windows-key lock scope, UI language, theme, notification options, the protected executable list, and per-game profiles.
 
 ## Changelog
 

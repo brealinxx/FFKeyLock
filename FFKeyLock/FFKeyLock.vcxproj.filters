@@ -93,6 +93,9 @@
     <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramCommands.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\ProtectedPrograms\GameProfileDialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramListView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -162,6 +165,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramCommands.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\ProtectedPrograms\GameProfileDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramListView.cpp">

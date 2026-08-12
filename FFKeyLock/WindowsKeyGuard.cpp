@@ -7,30 +7,62 @@
 #include "MainWindow.h"
 #include "TrayIcon.h"
 
+#include <array>
+
 namespace FFKeyLock
 {
 namespace
 {
 HHOOK g_keyboardHook = nullptr;
+std::array<bool, 256> g_keyDown{};
 
 LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
 {
-    if (code == HC_ACTION && g_windowsKeyGuardEnabled)
+    if (code != HC_ACTION)
     {
-        const auto* keyboard = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
-        if (keyboard && (keyboard->vkCode == VK_LWIN || keyboard->vkCode == VK_RWIN))
+        return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
+    }
+
+    const auto* keyboard = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+    if (!keyboard)
+    {
+        return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
+    }
+
+    const bool injected = (keyboard->flags & LLKHF_INJECTED) != 0;
+    const bool keyDown = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
+    const bool keyUp = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
+
+    const UINT virtualKey = keyboard->vkCode;
+    if (virtualKey < g_keyDown.size())
+    {
+        if (keyUp)
         {
-            return 1;
+            const bool wasTracked = g_keyDown[virtualKey];
+            g_keyDown[virtualKey] = false;
+            if (wasTracked && !injected && g_hWnd)
+            {
+                PostMessageW(g_hWnd, WM_GAME_CHAT_KEY, virtualKey, FALSE);
+            }
+        }
+        else if (keyDown && !g_keyDown[virtualKey] && !injected && IsGameChatControlKey(virtualKey))
+        {
+            g_keyDown[virtualKey] = true;
+            if (g_hWnd)
+            {
+                PostMessageW(g_hWnd, WM_GAME_CHAT_KEY, virtualKey, TRUE);
+            }
         }
     }
 
-    if (code == HC_ACTION && g_protectionEnabled && g_inGameProtection)
+    const bool blockWindowsKey = (g_windowsKeyGuardEnabled &&
+        g_windowsKeyGuardScope == WindowsKeyGuardScope::Always)
+        ? true
+        : ShouldBlockWindowsKeyForActiveGame();
+    if (blockWindowsKey && !injected &&
+        (keyboard->vkCode == VK_LWIN || keyboard->vkCode == VK_RWIN))
     {
-        const auto* keyboard = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
-        if (keyboard && keyboard->vkCode == VK_RETURN && wParam == WM_KEYDOWN && !(keyboard->flags & LLKHF_INJECTED))
-        {
-            ToggleGameChatInputMode();
-        }
+        return 1;
     }
 
     return CallNextHookEx(g_keyboardHook, code, wParam, lParam);
@@ -39,7 +71,9 @@ LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
 
 bool ApplyWindowsKeyGuard()
 {
-    if (!g_windowsKeyGuardEnabled && !g_protectionEnabled)
+    const bool needsKeyboardHook = g_protectionEnabled ||
+        (g_windowsKeyGuardEnabled && g_windowsKeyGuardScope == WindowsKeyGuardScope::Always);
+    if (!needsKeyboardHook)
     {
         DisableWindowsKeyGuard();
         return true;
@@ -70,11 +104,16 @@ void DisableWindowsKeyGuard()
         UnhookWindowsHookEx(g_keyboardHook);
         g_keyboardHook = nullptr;
     }
+    g_keyDown.fill(false);
 }
 
 void ToggleWindowsKeyGuard()
 {
     g_windowsKeyGuardEnabled = !g_windowsKeyGuardEnabled;
+    for (const std::wstring& game : g_gameExeNames)
+    {
+        g_gameProfiles[game].lockWindowsKey = g_windowsKeyGuardEnabled;
+    }
     ApplyWindowsKeyGuard();
     SaveConfig();
     UpdateMainWindow();

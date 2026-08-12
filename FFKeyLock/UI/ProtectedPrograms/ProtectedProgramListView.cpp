@@ -212,6 +212,7 @@ void ProtectedProgramListView::DeleteSelected()
     const std::wstring exeName = (*names_)[selected];
     names_->erase(names_->begin() + selected);
     paths_->erase(exeName);
+    g_gameProfiles.erase(exeName);
     selectedIndex_ = std::min(selected, static_cast<int>(names_->size()) - 1);
     ClampSelection();
     SaveConfig();

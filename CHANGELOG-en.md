@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v0.5.0
+
+### Added
+
+- Added a dedicated profile for every protected executable, including target input language, chat keys, chat mode, restore timeout, Windows-key locking, and notification preference.
+- Added a chat-input state machine supporting Enter, T, Y, and `/`, with toggle-to-chat and hold-to-chat modes.
+- Added immediate protection restoration through Enter/Esc and a per-game timeout fallback.
+- Added Windows-key lock scope: protected foreground only by default, plus an advanced always-lock option.
+- Added Tab, Shift+Tab, arrow-key, Space, and Enter support for custom-drawn buttons, together with accessible focus-name notifications.
+
+### Changed
+
+- Replaced foreground polling with event-driven `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` detection, retaining a 15-second fallback timer and automatically using a 1-second fallback if the hook cannot be installed.
+- Redesigned cards, buttons, and status areas with a more modern dark appearance and NVIDIA-green accents.
+- Reworked overlay rendering and animation around a cached surface, DWM synchronization, and short-lived high-resolution timing, while positioning overlays above Windows toast notifications.
+- Overlay notifications now respect the Windows reduced-animation setting and display without transitions when animations are disabled.
+- Windows-key status now shows the effective lock state and whether the scope is game foreground only or always.
+- Updated the project version to `v0.5.0` / `0.5.0`.
+
+### Fixed
+
+- Fixed uneven custom-overlay animation and avoidable per-frame rendering overhead.
+- Fixed custom-drawn buttons not supporting keyboard focus or activation, and added a clear focus indicator with automatic focus scrolling.
+- Fixed overlap and unexpected truncation between the protected-program-list title and its help button.
+- Fixed GDI object lifetime issues and unnecessary repeated foreground-process queries.
+- Fixed per-game profiles not being removed when resetting settings or deleting a protected executable.
+- Fixed EXE properties reporting version `0.0.0.0`, and switched to proper MSBuild merging for DPI, Windows compatibility, and Segment Heap manifest metadata.
+
 ## v0.4
 
 ### Added

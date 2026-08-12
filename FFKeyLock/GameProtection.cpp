@@ -16,37 +16,136 @@ namespace FFKeyLock
 {
 namespace
 {
-std::wstring GetProcessExeName(HWND hwnd)
+struct ForegroundProcessCache
 {
-    if (!hwnd)
-    {
-        return L"";
-    }
-
+    HWND window = nullptr;
     DWORD processId = 0;
-    GetWindowThreadProcessId(hwnd, &processId);
-    if (!processId)
+    std::wstring exeName;
+};
+
+ForegroundProcessCache g_foregroundProcessCache;
+HWINEVENTHOOK g_foregroundEventHook = nullptr;
+
+GameProfile DefaultGameProfile()
+{
+    GameProfile profile{};
+    profile.lockWindowsKey = g_windowsKeyGuardEnabled;
+    profile.showNotifications = g_notificationsEnabled || g_overlayNotificationsEnabled;
+    return profile;
+}
+
+void NormalizeProfile(GameProfile& profile)
+{
+    profile.restoreTimeoutMs = std::clamp(profile.restoreTimeoutMs, 1000U, 300000U);
+    std::vector<UINT> keys;
+    for (UINT key : profile.chatKeys)
     {
-        return L"";
+        if (key > 0 && key < 256 && std::find(keys.begin(), keys.end(), key) == keys.end())
+        {
+            keys.push_back(key);
+        }
+    }
+    profile.chatKeys = keys.empty() ? std::vector<UINT>{ VK_RETURN } : std::move(keys);
+}
+
+const GameProfile& ActiveGameProfile()
+{
+    const auto profile = g_gameProfiles.find(g_activeGameExeName);
+    if (profile != g_gameProfiles.end())
+    {
+        return profile->second;
+    }
+    static GameProfile fallback;
+    fallback = DefaultGameProfile();
+    return fallback;
+}
+
+bool IsConfiguredChatKey(const GameProfile& profile, UINT virtualKey)
+{
+    return std::find(profile.chatKeys.begin(), profile.chatKeys.end(), virtualKey) != profile.chatKeys.end();
+}
+
+void ApplyTargetLanguage(const GameProfile& profile, HWND targetWindow)
+{
+    if (profile.targetLanguage == ProtectedInputLanguage::Chinese)
+    {
+        SwitchToChinese(targetWindow);
+    }
+    else
+    {
+        SwitchToEnglish(targetWindow);
+    }
+}
+
+void StopChatTimeoutTimer()
+{
+    if (g_hWnd)
+    {
+        KillTimer(g_hWnd, TIMER_CHAT_TIMEOUT);
+    }
+}
+
+void ShowChatOverlay(bool restored)
+{
+    const GameProfile& profile = ActiveGameProfile();
+    if (!profile.showNotifications || !g_overlayNotificationsEnabled)
+    {
+        return;
     }
 
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
-    if (!process)
+    if (restored)
     {
-        return L"";
+        OverlayNotificationManager::ShowSuccess(
+            Text(L"保护已恢复", L"Protection restored"),
+            profile.targetLanguage == ProtectedInputLanguage::Chinese
+                ? Text(L"输入法已锁定中文", L"Chinese locked")
+                : Text(L"输入法已锁定英文", L"English locked"));
+    }
+    else
+    {
+        OverlayNotificationManager::ShowInfo(
+            Text(L"输入法已恢复", L"Input restored"),
+            Text(L"聊天输入中", L"Chat input"));
+    }
+}
+
+void EndChatInput(bool showNotification)
+{
+    if (!g_chatInputSuspended)
+    {
+        return;
     }
 
-    std::wstring path(MAX_PATH, L'\0');
-    DWORD size = static_cast<DWORD>(path.size());
-    if (!QueryFullProcessImageNameW(process, 0, path.data(), &size))
+    g_chatInputSuspended = false;
+    g_chatInputSuspendUntil = 0;
+    g_chatActiveKey = 0;
+    StopChatTimeoutTimer();
+    ApplyTargetLanguage(ActiveGameProfile(), IsWindow(g_savedWindow) ? g_savedWindow : GetForegroundWindow());
+    if (showNotification)
     {
-        CloseHandle(process);
-        return L"";
+        ShowChatOverlay(true);
+    }
+    UpdateMainWindow();
+}
+
+void BeginChatInput(UINT virtualKey)
+{
+    if (g_chatInputSuspended)
+    {
+        return;
     }
 
-    CloseHandle(process);
-    path.resize(size);
-    return GetExeNameFromPath(path);
+    const GameProfile& profile = ActiveGameProfile();
+    g_chatInputSuspended = true;
+    g_chatActiveKey = virtualKey;
+    g_chatInputSuspendUntil = GetTickCount64() + profile.restoreTimeoutMs;
+    ApplySavedLayout(IsWindow(g_savedWindow) ? g_savedWindow : GetForegroundWindow());
+    if (g_hWnd)
+    {
+        SetTimer(g_hWnd, TIMER_CHAT_TIMEOUT, profile.restoreTimeoutMs, nullptr);
+    }
+    ShowChatOverlay(false);
+    UpdateMainWindow();
 }
 
 std::wstring GetProcessExePath(HWND hwnd)
@@ -69,17 +168,22 @@ std::wstring GetProcessExePath(HWND hwnd)
         return L"";
     }
 
-    std::wstring path(MAX_PATH, L'\0');
+    std::wstring path(32768, L'\0');
     DWORD size = static_cast<DWORD>(path.size());
-    if (!QueryFullProcessImageNameW(process, 0, path.data(), &size))
+    const BOOL queried = QueryFullProcessImageNameW(process, 0, path.data(), &size);
+    CloseHandle(process);
+    if (!queried)
     {
-        CloseHandle(process);
         return L"";
     }
-
-    CloseHandle(process);
     path.resize(size);
     return path;
+}
+
+std::wstring GetProcessExeName(HWND hwnd)
+{
+    const std::wstring path = GetProcessExePath(hwnd);
+    return path.empty() ? L"" : GetExeNameFromPath(path);
 }
 
 std::wstring GetForegroundProcessExeName(HWND* foregroundWindow = nullptr)
@@ -90,7 +194,21 @@ std::wstring GetForegroundProcessExeName(HWND* foregroundWindow = nullptr)
         *foregroundWindow = hwnd;
     }
 
-    return GetProcessExeName(hwnd);
+    DWORD processId = 0;
+    if (hwnd)
+    {
+        GetWindowThreadProcessId(hwnd, &processId);
+    }
+    if (hwnd == g_foregroundProcessCache.window && processId != 0 &&
+        processId == g_foregroundProcessCache.processId)
+    {
+        return g_foregroundProcessCache.exeName;
+    }
+
+    g_foregroundProcessCache.window = hwnd;
+    g_foregroundProcessCache.processId = processId;
+    g_foregroundProcessCache.exeName = GetProcessExeName(hwnd);
+    return g_foregroundProcessCache.exeName;
 }
 
 bool IsGameExe(const std::wstring& exeName)
@@ -98,28 +216,108 @@ bool IsGameExe(const std::wstring& exeName)
     return std::find(g_gameExeNames.begin(), g_gameExeNames.end(), ToLower(exeName)) != g_gameExeNames.end();
 }
 
-void EnterGameProtection(HWND foregroundWindow)
+void EnterGameProtection(const std::wstring& exeName, HWND foregroundWindow)
 {
-    if (g_inGameProtection)
+    const bool switchingProtectedGame = g_inGameProtection && g_activeGameExeName != exeName;
+    if (g_inGameProtection && !switchingProtectedGame)
     {
+        if (foregroundWindow != g_savedWindow)
+        {
+            g_savedWindow = foregroundWindow;
+            if (!g_chatInputSuspended)
+            {
+                ApplyTargetLanguage(ActiveGameProfile(), foregroundWindow);
+            }
+        }
         return;
     }
 
-    DWORD threadId = foregroundWindow ? GetWindowThreadProcessId(foregroundWindow, nullptr) : 0;
-    g_savedLayout = threadId ? GetKeyboardLayout(threadId) : GetKeyboardLayout(0);
-    g_savedWindow = foregroundWindow;
-    g_inGameProtection = true;
-    g_chatInputSuspended = false;
-    g_chatInputSuspendUntil = 0;
-    SwitchToEnglish(foregroundWindow);
-    if (g_overlayNotificationsEnabled)
+    if (!g_inGameProtection)
     {
-        OverlayNotificationManager::ShowSuccess(
+        const DWORD threadId = foregroundWindow ? GetWindowThreadProcessId(foregroundWindow, nullptr) : 0;
+        g_savedLayout = threadId ? GetKeyboardLayout(threadId) : GetKeyboardLayout(0);
+        g_inGameProtection = true;
+    }
+    else
+    {
+        g_chatInputSuspended = false;
+        g_chatInputSuspendUntil = 0;
+        g_chatActiveKey = 0;
+        StopChatTimeoutTimer();
+    }
+
+    g_activeGameExeName = exeName;
+    g_savedWindow = foregroundWindow;
+    const GameProfile& profile = ActiveGameProfile();
+    ApplyTargetLanguage(profile, foregroundWindow);
+    if (profile.showNotifications)
+    {
+        ShowTrayNotification(
             L"FFKeyLock",
-            Text(L"已进入保护模式，输入法已锁定为英文。", L"Protection is active. Input language is locked to English."));
+            profile.targetLanguage == ProtectedInputLanguage::Chinese
+                ? Text(L"已进入保护模式，输入法已锁定为中文。", L"Protection is active. Input language is locked to Chinese.")
+                : Text(L"已进入保护模式，输入法已锁定为英文。", L"Protection is active. Input language is locked to English."),
+            true);
     }
     UpdateMainWindow();
 }
+
+void CALLBACK ForegroundEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG objectId, LONG childId, DWORD, DWORD)
+{
+    if (event == EVENT_SYSTEM_FOREGROUND && hwnd && objectId == OBJID_WINDOW && childId == CHILDID_SELF && g_hWnd)
+    {
+        PostMessageW(g_hWnd, WM_FOREGROUND_CHANGED, reinterpret_cast<WPARAM>(hwnd), 0);
+    }
+}
+}
+
+GameProfile GetGameProfileForExe(const std::wstring& exeName)
+{
+    const auto profile = g_gameProfiles.find(ToLower(exeName));
+    return profile == g_gameProfiles.end() ? DefaultGameProfile() : profile->second;
+}
+
+void SetGameProfileForExe(const std::wstring& exeName, GameProfile profile)
+{
+    const std::wstring normalizedName = ToLower(Trim(exeName));
+    if (normalizedName.empty())
+    {
+        return;
+    }
+    NormalizeProfile(profile);
+    g_gameProfiles[normalizedName] = std::move(profile);
+    SaveConfig();
+    if (g_inGameProtection && g_activeGameExeName == normalizedName && !g_chatInputSuspended)
+    {
+        ApplyTargetLanguage(ActiveGameProfile(), IsWindow(g_savedWindow) ? g_savedWindow : GetForegroundWindow());
+    }
+    UpdateMainWindow();
+}
+
+bool InitializeForegroundDetection()
+{
+    if (g_foregroundEventHook)
+    {
+        return true;
+    }
+    g_foregroundEventHook = SetWinEventHook(
+        EVENT_SYSTEM_FOREGROUND,
+        EVENT_SYSTEM_FOREGROUND,
+        nullptr,
+        ForegroundEventProc,
+        0,
+        0,
+        WINEVENT_OUTOFCONTEXT);
+    return g_foregroundEventHook != nullptr;
+}
+
+void ShutdownForegroundDetection()
+{
+    if (g_foregroundEventHook)
+    {
+        UnhookWinEvent(g_foregroundEventHook);
+        g_foregroundEventHook = nullptr;
+    }
 }
 
 void LeaveGameProtection()
@@ -129,16 +327,27 @@ void LeaveGameProtection()
         return;
     }
 
+    const GameProfile profile = ActiveGameProfile();
+    StopChatTimeoutTimer();
     RestoreSavedLayout();
     g_inGameProtection = false;
     g_chatInputSuspended = false;
     g_chatInputSuspendUntil = 0;
-    ShowTrayNotification(L"FFKeyLock", Text(L"已离开游戏窗口，输入法状态已恢复。", L"Left the game window. Input language has been restored."));
+    g_chatActiveKey = 0;
+    g_activeGameExeName.clear();
+    if (profile.showNotifications)
+    {
+        ShowTrayNotification(
+            L"FFKeyLock",
+            Text(L"已离开游戏窗口，输入法状态已恢复。", L"Left the game window. Input language has been restored."));
+    }
     UpdateMainWindow();
 }
 
 void DetectForegroundGame()
 {
+    const std::wstring previousDetectedGame = g_currentDetectedGameName;
+    const bool wasInGameProtection = g_inGameProtection;
     HWND foregroundWindow = nullptr;
     const std::wstring exeName = GetForegroundProcessExeName(&foregroundWindow);
     RememberExternalForegroundWindow(foregroundWindow);
@@ -148,19 +357,92 @@ void DetectForegroundGame()
     {
         g_currentDetectedGameName.clear();
         LeaveGameProtection();
-        UpdateMainWindow();
+        if (!wasInGameProtection && previousDetectedGame != g_currentDetectedGameName)
+        {
+            UpdateMainWindow();
+        }
         return;
     }
 
-    if (!exeName.empty() && IsGameExe(exeName))
+    if (!g_currentDetectedGameName.empty())
     {
         ResumeGameProtectionAfterChatTimeout();
-        EnterGameProtection(foregroundWindow);
+        EnterGameProtection(g_currentDetectedGameName, foregroundWindow);
     }
     else
     {
         LeaveGameProtection();
     }
+
+    if (wasInGameProtection == g_inGameProtection && previousDetectedGame != g_currentDetectedGameName)
+    {
+        UpdateMainWindow();
+    }
+}
+
+bool IsGameChatControlKey(UINT virtualKey)
+{
+    if (!g_protectionEnabled || !g_inGameProtection || virtualKey >= 256)
+    {
+        return false;
+    }
+    const GameProfile& profile = ActiveGameProfile();
+    return IsConfiguredChatKey(profile, virtualKey) ||
+        (g_chatInputSuspended && (virtualKey == VK_RETURN || virtualKey == VK_ESCAPE));
+}
+
+void HandleGameChatKey(UINT virtualKey, bool keyDown)
+{
+    if (!g_protectionEnabled || !g_inGameProtection)
+    {
+        return;
+    }
+
+    HWND foregroundWindow = nullptr;
+    const std::wstring exeName = GetForegroundProcessExeName(&foregroundWindow);
+    if (exeName.empty() || exeName != g_activeGameExeName || !IsGameExe(exeName))
+    {
+        return;
+    }
+
+    const GameProfile& profile = ActiveGameProfile();
+    if (!g_chatInputSuspended)
+    {
+        if (keyDown && IsConfiguredChatKey(profile, virtualKey))
+        {
+            BeginChatInput(virtualKey);
+        }
+        return;
+    }
+
+    if (keyDown && (virtualKey == VK_ESCAPE || virtualKey == VK_RETURN))
+    {
+        EndChatInput(true);
+        return;
+    }
+    if (profile.chatMode == ChatActivationMode::Hold && !keyDown && virtualKey == g_chatActiveKey)
+    {
+        EndChatInput(true);
+    }
+}
+
+bool ShouldBlockWindowsKeyForActiveGame()
+{
+    return g_protectionEnabled && g_inGameProtection && ActiveGameProfile().lockWindowsKey;
+}
+
+void ResumeGameProtectionAfterChatTimeout()
+{
+    if (!g_inGameProtection || !g_chatInputSuspended || g_chatInputSuspendUntil == 0)
+    {
+        StopChatTimeoutTimer();
+        return;
+    }
+    if (GetTickCount64() < g_chatInputSuspendUntil)
+    {
+        return;
+    }
+    EndChatInput(true);
 }
 
 bool IsStartupEnabled()
@@ -170,7 +452,6 @@ bool IsStartupEnabled()
     {
         return false;
     }
-
     wchar_t value[MAX_PATH * 2]{};
     DWORD type = 0;
     DWORD bytes = sizeof(value);
@@ -187,7 +468,6 @@ void SetStartupEnabled(bool enabled)
         ShowTrayNotification(L"FFKeyLock", Text(L"开机启动设置失败。", L"Failed to update startup setting."));
         return;
     }
-
     if (enabled)
     {
         const std::wstring command = L"\"" + GetCurrentExePath() + L"\"";
@@ -198,7 +478,6 @@ void SetStartupEnabled(bool enabled)
     {
         RegDeleteValueW(key, kAppName);
     }
-
     RegCloseKey(key);
 }
 
@@ -211,7 +490,6 @@ bool AddGameExeName(std::wstring exeName)
         ShowTrayNotification(L"FFKeyLock", Text(L"请输入或选择有效的受保护程序。", L"Enter or select a valid protected executable."));
         return false;
     }
-
     if (exeName.find(L'\\') != std::wstring::npos || exeName.find(L'/') != std::wstring::npos)
     {
         exePath = exeName;
@@ -221,18 +499,15 @@ bool AddGameExeName(std::wstring exeName)
     {
         exeName = ToLower(exeName);
     }
-
     if (exeName.find(L'.') == std::wstring::npos)
     {
         exeName += L".exe";
     }
-
     if (exeName == ToLower(std::filesystem::path(GetCurrentExePath()).filename().wstring()))
     {
         ShowTrayNotification(L"FFKeyLock", Text(L"不能把 FFKeyLock 自己添加为受保护程序。", L"FFKeyLock cannot be added as a protected program."));
         return false;
     }
-
     if (IsGameExe(exeName))
     {
         if (!exePath.empty())
@@ -249,6 +524,7 @@ bool AddGameExeName(std::wstring exeName)
     {
         g_gameExePaths[exeName] = exePath;
     }
+    g_gameProfiles[exeName] = DefaultGameProfile();
     SaveConfig();
     ShowTrayNotification(L"FFKeyLock", (std::wstring(Text(L"已添加受保护程序：", L"Added protected executable: ")) + exeName).c_str());
     UpdateMainWindow();
@@ -263,61 +539,6 @@ void AddProgramAsGame(HWND targetWindow)
         ShowTrayNotification(L"FFKeyLock", Text(L"没有可添加的前台程序。", L"No foreground program can be added."));
         return;
     }
-
     AddGameExeName(exePath);
-}
-
-void ToggleGameChatInputMode()
-{
-    if (!g_inGameProtection)
-    {
-        return;
-    }
-
-    HWND foregroundWindow = nullptr;
-    const std::wstring exeName = GetForegroundProcessExeName(&foregroundWindow);
-    if (exeName.empty() || !IsGameExe(exeName))
-    {
-        return;
-    }
-
-    HWND targetWindow = IsWindow(g_savedWindow) ? g_savedWindow : foregroundWindow;
-    if (!g_chatInputSuspended)
-    {
-        g_chatInputSuspended = true;
-        g_chatInputSuspendUntil = GetTickCount() + 12000;
-        ApplySavedLayout(targetWindow);
-        OverlayNotificationManager::ShowInfo(
-            Text(L"输入法已恢复", L"Input restored"),
-            Text(L"聊天输入中", L"Chat input"));
-    }
-    else
-    {
-        g_chatInputSuspended = false;
-        g_chatInputSuspendUntil = 0;
-        SwitchToEnglish(targetWindow);
-        OverlayNotificationManager::ShowSuccess(
-            Text(L"保护已恢复", L"Protection restored"),
-            Text(L"输入法已锁定英文", L"English locked"));
-    }
-    UpdateMainWindow();
-}
-
-void ResumeGameProtectionAfterChatTimeout()
-{
-    if (!g_inGameProtection || !g_chatInputSuspended || g_chatInputSuspendUntil == 0)
-    {
-        return;
-    }
-
-    if (static_cast<LONG>(GetTickCount() - g_chatInputSuspendUntil) < 0)
-    {
-        return;
-    }
-
-    g_chatInputSuspended = false;
-    g_chatInputSuspendUntil = 0;
-    SwitchToEnglish(IsWindow(g_savedWindow) ? g_savedWindow : GetForegroundWindow());
-    UpdateMainWindow();
 }
 }

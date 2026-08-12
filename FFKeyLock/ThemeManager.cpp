@@ -119,26 +119,26 @@ void RebuildResources()
     g_dark = ResolveDarkTheme();
     if (g_dark)
     {
-        g_windowColor = RGB(32, 32, 32);
-        g_surfaceColor = RGB(43, 43, 43);
-        g_cardColor = RGB(43, 43, 43);
-        g_buttonColor = RGB(58, 58, 58);
-        g_buttonHotColor = RGB(72, 72, 72);
-        g_buttonPressedColor = RGB(85, 85, 85);
-        g_textColor = RGB(230, 230, 230);
-        g_mutedTextColor = RGB(184, 184, 184);
-        g_disabledTextColor = RGB(122, 122, 122);
-        g_borderColor = RGB(82, 82, 82);
-        g_accentColor = RGB(86, 156, 214);
-        g_selectedColor = RGB(52, 80, 112);
-        g_menuBarColor = RGB(45, 45, 48);
-        g_menuBarHoverColor = RGB(55, 55, 58);
-        g_menuBackgroundColor = RGB(45, 45, 48);
-        g_menuHoverColor = RGB(55, 55, 58);
-        g_menuPressedColor = RGB(63, 63, 70);
-        g_menuBorderColor = RGB(69, 69, 69);
-        g_menuSeparatorColor = RGB(58, 58, 58);
-        g_menuIconColor = RGB(218, 218, 218);
+        g_windowColor = RGB(18, 20, 21);
+        g_surfaceColor = RGB(27, 29, 31);
+        g_cardColor = RGB(27, 29, 31);
+        g_buttonColor = RGB(35, 38, 40);
+        g_buttonHotColor = RGB(43, 47, 49);
+        g_buttonPressedColor = RGB(30, 33, 35);
+        g_textColor = RGB(242, 244, 244);
+        g_mutedTextColor = RGB(166, 171, 173);
+        g_disabledTextColor = RGB(105, 110, 112);
+        g_borderColor = RGB(55, 59, 61);
+        g_accentColor = RGB(118, 185, 0);
+        g_selectedColor = RGB(47, 67, 29);
+        g_menuBarColor = RGB(22, 24, 25);
+        g_menuBarHoverColor = RGB(36, 39, 41);
+        g_menuBackgroundColor = RGB(27, 29, 31);
+        g_menuHoverColor = RGB(40, 44, 46);
+        g_menuPressedColor = RGB(32, 35, 37);
+        g_menuBorderColor = RGB(52, 56, 58);
+        g_menuSeparatorColor = RGB(45, 48, 50);
+        g_menuIconColor = RGB(229, 231, 231);
     }
     else
     {
@@ -398,10 +398,12 @@ void ThemeManager::DrawButton(const DRAWITEMSTRUCT& item)
         RECT borderRect = rect;
         borderRect.top += Scale(9);
         HPEN pen = CreatePen(PS_SOLID, 1, g_borderColor);
-        GdiUtils::SelectObjectScope penScope(hdc, pen);
-        HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        RoundRect(hdc, borderRect.left, borderRect.top, borderRect.right, borderRect.bottom, Scale(8), Scale(8));
-        SelectObject(hdc, oldBrush);
+        {
+            GdiUtils::SelectObjectScope penScope(hdc, pen);
+            HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            RoundRect(hdc, borderRect.left, borderRect.top, borderRect.right, borderRect.bottom, Scale(8), Scale(8));
+            SelectObject(hdc, oldBrush);
+        }
         DeleteObject(pen);
 
         RECT textBackground = textRect;

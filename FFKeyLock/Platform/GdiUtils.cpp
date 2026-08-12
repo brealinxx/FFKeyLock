@@ -105,9 +105,11 @@ void FillRoundRect(HDC hdc, const RECT& rect, COLORREF fill, COLORREF border, in
 {
     HBRUSH brush = CreateSolidBrush(fill);
     HPEN pen = CreatePen(PS_SOLID, 1, border);
-    SelectObjectScope brushScope(hdc, brush);
-    SelectObjectScope penScope(hdc, pen);
-    RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    {
+        SelectObjectScope brushScope(hdc, brush);
+        SelectObjectScope penScope(hdc, pen);
+        RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    }
     DeleteObject(pen);
     DeleteObject(brush);
 }
@@ -115,9 +117,11 @@ void FillRoundRect(HDC hdc, const RECT& rect, COLORREF fill, COLORREF border, in
 void DrawSeparator(HDC hdc, int left, int right, int y, COLORREF color)
 {
     HPEN pen = CreatePen(PS_SOLID, 1, color);
-    SelectObjectScope penScope(hdc, pen);
-    MoveToEx(hdc, left, y, nullptr);
-    LineTo(hdc, right, y);
+    {
+        SelectObjectScope penScope(hdc, pen);
+        MoveToEx(hdc, left, y, nullptr);
+        LineTo(hdc, right, y);
+    }
     DeleteObject(pen);
 }
 }

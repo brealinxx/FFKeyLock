@@ -34,6 +34,8 @@ RoundedMenuItem MenuSeparator()
 std::vector<RoundedMenuItem> BuildContextMenu()
 {
     return {
+        MenuItem(IDM_EDIT_GAME_PROFILE, Text(L"独立配置...", L"Game profile...")),
+        MenuSeparator(),
         MenuItem(IDM_COPY_GAME_NAME, Text(L"复制名称", L"Copy name"), L"Ctrl+C"),
         MenuItem(IDM_OPEN_GAME_FOLDER, Text(L"跳转到该程序文件夹", L"Open program folder")),
         MenuSeparator(),

@@ -22,6 +22,8 @@ struct State
     EnsureLayoutCallback ensureLayout = nullptr;
     ButtonHitTestCallback hitTestButton = nullptr;
     ButtonStateCallback setButtonState = nullptr;
+    ButtonNavigateCallback navigateButton = nullptr;
+    ButtonAccessibleTextCallback buttonAccessibleText = nullptr;
     MouseDownCallback mouseDown = nullptr;
     MouseClickCallback click = nullptr;
     RightClickCallback rightClick = nullptr;
@@ -30,6 +32,7 @@ struct State
     int contentHeight = 0;
     int hotButtonId = 0;
     int pressedButtonId = 0;
+    int focusedButtonId = 0;
     bool draggingScrollThumb = false;
     bool suppressNextContextMenu = false;
     int dragStartY = 0;
@@ -73,12 +76,12 @@ void UpdateScrollBar(HWND hwnd, State& state, int viewportHeight)
 
 void InvalidatePanel(HWND hwnd)
 {
-    InvalidateRect(hwnd, nullptr, TRUE);
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 void RedrawPanel(HWND hwnd)
 {
-    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE);
 }
 
 void Layout(HWND hwnd)
@@ -148,6 +151,23 @@ void SetPressedButton(HWND hwnd, State& state, int id)
     if (state.setButtonState && state.pressedButtonId)
     {
         state.setButtonState(hwnd, state.pressedButtonId, state.hotButtonId == state.pressedButtonId, true);
+    }
+    InvalidatePanel(hwnd);
+}
+
+void SetFocusedButton(HWND hwnd, State& state, int id)
+{
+    if (state.focusedButtonId == id)
+    {
+        return;
+    }
+    state.focusedButtonId = id;
+    if (id && state.buttonAccessibleText)
+    {
+        const std::wstring name = state.buttonAccessibleText(hwnd, id);
+        SetWindowTextW(hwnd, name.c_str());
+        NotifyWinEvent(EVENT_OBJECT_NAMECHANGE, hwnd, OBJID_CLIENT, CHILDID_SELF);
+        NotifyWinEvent(EVENT_OBJECT_FOCUS, hwnd, OBJID_CLIENT, CHILDID_SELF);
     }
     InvalidatePanel(hwnd);
 }
@@ -247,6 +267,72 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Layout(hwnd);
         RedrawPanel(hwnd);
         return 0;
+
+    case WM_GETDLGCODE:
+        return DLGC_WANTTAB | DLGC_WANTARROWS | DLGC_WANTCHARS;
+
+    case WM_SETFOCUS:
+    {
+        State* state = GetState(hwnd);
+        if (state && state->focusedButtonId == 0 && state->navigateButton)
+        {
+            EnsureLayoutForHitTest(hwnd, *state);
+            SetFocusedButton(hwnd, *state, state->navigateButton(hwnd, 0, 1));
+        }
+        InvalidatePanel(hwnd);
+        return 0;
+    }
+
+    case WM_KILLFOCUS:
+    {
+        State* state = GetState(hwnd);
+        if (state)
+        {
+            SetPressedButton(hwnd, *state, 0);
+        }
+        InvalidatePanel(hwnd);
+        return 0;
+    }
+
+    case WM_KEYDOWN:
+    {
+        State* state = GetState(hwnd);
+        if (!state)
+        {
+            return 0;
+        }
+        EnsureLayoutForHitTest(hwnd, *state);
+        if ((wParam == VK_TAB || wParam == VK_LEFT || wParam == VK_UP ||
+            wParam == VK_RIGHT || wParam == VK_DOWN) && state->navigateButton)
+        {
+            const int direction = wParam == VK_LEFT || wParam == VK_UP ||
+                (wParam == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000)) ? -1 : 1;
+            SetFocusedButton(hwnd, *state,
+                state->navigateButton(hwnd, state->focusedButtonId, direction));
+            return 0;
+        }
+        if ((wParam == VK_SPACE || wParam == VK_RETURN) && state->focusedButtonId &&
+            (lParam & (1LL << 30)) == 0)
+        {
+            SetPressedButton(hwnd, *state, state->focusedButtonId);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_KEYUP:
+    {
+        State* state = GetState(hwnd);
+        if (state && (wParam == VK_SPACE || wParam == VK_RETURN) &&
+            state->pressedButtonId == state->focusedButtonId && state->focusedButtonId)
+        {
+            const int id = state->focusedButtonId;
+            SetPressedButton(hwnd, *state, 0);
+            SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), reinterpret_cast<LPARAM>(hwnd));
+            return 0;
+        }
+        break;
+    }
 
     case WM_VSCROLL:
     {
@@ -392,12 +478,16 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         const int id = state->hitTestButton(hwnd, point, state->scrollY);
         if (id)
         {
+            SetFocus(hwnd);
+            SetFocusedButton(hwnd, *state, id);
             SetCapture(hwnd);
             SetPressedButton(hwnd, *state, id);
             return 0;
         }
         if (state->mouseDown && state->mouseDown(hwnd, point, state->scrollY))
         {
+            SetFocus(hwnd);
+            SetFocusedButton(hwnd, *state, 0);
             SetHotButton(hwnd, *state, 0);
         }
         return 0;
@@ -536,7 +626,7 @@ HWND Create(HWND parent, HINSTANCE instance)
         0,
         kClassName,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
         0,
         0,
         0,
@@ -589,6 +679,24 @@ void SetButtonStateCallback(HWND panel, ButtonStateCallback callback)
     if (state)
     {
         state->setButtonState = callback;
+    }
+}
+
+void SetButtonNavigateCallback(HWND panel, ButtonNavigateCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->navigateButton = callback;
+    }
+}
+
+void SetButtonAccessibleTextCallback(HWND panel, ButtonAccessibleTextCallback callback)
+{
+    State* state = GetState(panel);
+    if (state)
+    {
+        state->buttonAccessibleText = callback;
     }
 }
 
@@ -657,6 +765,12 @@ int ScrollY(HWND panel)
 {
     State* state = GetState(panel);
     return state ? state->scrollY : 0;
+}
+
+int FocusedButtonId(HWND panel)
+{
+    State* state = GetState(panel);
+    return state ? state->focusedButtonId : 0;
 }
 }
 }

@@ -131,6 +131,140 @@ std::wstring JoinGamePaths()
     }
     return joined;
 }
+
+GameProfile DefaultGameProfile()
+{
+    GameProfile profile{};
+    profile.lockWindowsKey = g_windowsKeyGuardEnabled;
+    profile.showNotifications = g_notificationsEnabled || g_overlayNotificationsEnabled;
+    return profile;
+}
+
+std::vector<std::wstring> SplitDelimited(const std::wstring& value, wchar_t delimiter)
+{
+    std::vector<std::wstring> fields;
+    size_t start = 0;
+    while (start <= value.size())
+    {
+        const size_t end = value.find(delimiter, start);
+        fields.push_back(value.substr(start, end == std::wstring::npos ? end : end - start));
+        if (end == std::wstring::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+    return fields;
+}
+
+std::wstring JoinChatKeys(const std::vector<UINT>& keys)
+{
+    std::wstring result;
+    for (UINT key : keys)
+    {
+        if (!result.empty())
+        {
+            result += L",";
+        }
+        result += std::to_wstring(key);
+    }
+    return result;
+}
+
+std::vector<UINT> ParseChatKeys(const std::wstring& value)
+{
+    std::vector<UINT> keys;
+    for (const std::wstring& field : SplitDelimited(value, L','))
+    {
+        wchar_t* end = nullptr;
+        const unsigned long parsed = wcstoul(field.c_str(), &end, 10);
+        if (end != field.c_str() && parsed > 0 && parsed < 256)
+        {
+            const UINT key = static_cast<UINT>(parsed);
+            if (std::find(keys.begin(), keys.end(), key) == keys.end())
+            {
+                keys.push_back(key);
+            }
+        }
+    }
+    if (keys.empty())
+    {
+        keys.push_back(VK_RETURN);
+    }
+    return keys;
+}
+
+void NormalizeProfile(GameProfile& profile)
+{
+    profile.restoreTimeoutMs = std::clamp(profile.restoreTimeoutMs, 1000U, 300000U);
+    std::vector<UINT> normalized;
+    for (UINT key : profile.chatKeys)
+    {
+        if (key > 0 && key < 256 && std::find(normalized.begin(), normalized.end(), key) == normalized.end())
+        {
+            normalized.push_back(key);
+        }
+    }
+    profile.chatKeys = normalized.empty() ? std::vector<UINT>{ VK_RETURN } : std::move(normalized);
+}
+
+std::unordered_map<std::wstring, GameProfile> SplitGameProfiles(const std::wstring& value)
+{
+    std::unordered_map<std::wstring, GameProfile> profiles;
+    for (const std::wstring& record : SplitDelimited(value, L'|'))
+    {
+        const std::vector<std::wstring> fields = SplitDelimited(record, L'^');
+        if (fields.size() < 7)
+        {
+            continue;
+        }
+
+        const std::wstring exeName = ToLower(Trim(fields[0]));
+        if (exeName.empty())
+        {
+            continue;
+        }
+
+        GameProfile profile = DefaultGameProfile();
+        profile.targetLanguage = _wcsicmp(fields[1].c_str(), L"zh") == 0
+            ? ProtectedInputLanguage::Chinese
+            : ProtectedInputLanguage::English;
+        profile.chatKeys = ParseChatKeys(fields[2]);
+        profile.chatMode = _wcsicmp(fields[3].c_str(), L"hold") == 0
+            ? ChatActivationMode::Hold
+            : ChatActivationMode::Toggle;
+        profile.restoreTimeoutMs = static_cast<UINT>(wcstoul(fields[4].c_str(), nullptr, 10));
+        profile.lockWindowsKey = wcstoul(fields[5].c_str(), nullptr, 10) != 0;
+        profile.showNotifications = wcstoul(fields[6].c_str(), nullptr, 10) != 0;
+        NormalizeProfile(profile);
+        profiles[exeName] = std::move(profile);
+    }
+    return profiles;
+}
+
+std::wstring JoinGameProfiles()
+{
+    std::wstring joined;
+    for (const std::wstring& game : g_gameExeNames)
+    {
+        auto profileIt = g_gameProfiles.find(game);
+        const GameProfile profile = profileIt == g_gameProfiles.end() ? DefaultGameProfile() : profileIt->second;
+        if (!joined.empty())
+        {
+            joined += L"|";
+        }
+        joined += game;
+        joined += L"^";
+        joined += profile.targetLanguage == ProtectedInputLanguage::Chinese ? L"zh" : L"en";
+        joined += L"^" + JoinChatKeys(profile.chatKeys);
+        joined += L"^";
+        joined += profile.chatMode == ChatActivationMode::Hold ? L"hold" : L"toggle";
+        joined += L"^" + std::to_wstring(profile.restoreTimeoutMs);
+        joined += profile.lockWindowsKey ? L"^1" : L"^0";
+        joined += profile.showNotifications ? L"^1" : L"^0";
+    }
+    return joined;
+}
 }
 
 std::wstring GetCurrentExePath()
@@ -169,6 +303,9 @@ void SaveConfig()
     WritePrivateProfileStringW(kConfigSection, kProtectionKey, g_protectionEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kAutoDetectKey, g_autoDetectEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kWindowsKeyGuardKey, g_windowsKeyGuardEnabled ? L"1" : L"0", g_configPath.c_str());
+    WritePrivateProfileStringW(kConfigSection, kWindowsKeyGuardScopeKey,
+        g_windowsKeyGuardScope == WindowsKeyGuardScope::Always ? L"always" : L"protected",
+        g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kNotificationsKey, g_notificationsEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kOverlayNotificationsKey, g_overlayNotificationsEnabled ? L"1" : L"0", g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kLanguageKey, IsEnglish() ? L"en" : L"zh", g_configPath.c_str());
@@ -184,6 +321,7 @@ void SaveConfig()
     WritePrivateProfileStringW(kConfigSection, kThemeKey, theme, g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kGamesKey, JoinGames().c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(kConfigSection, kGamePathsKey, JoinGamePaths().c_str(), g_configPath.c_str());
+    WritePrivateProfileStringW(kConfigSection, kGameProfilesKey, JoinGameProfiles().c_str(), g_configPath.c_str());
 }
 
 void LoadConfig()
@@ -193,6 +331,12 @@ void LoadConfig()
     g_protectionEnabled = GetPrivateProfileIntW(kConfigSection, kProtectionKey, 1, g_configPath.c_str()) != 0;
     g_autoDetectEnabled = GetPrivateProfileIntW(kConfigSection, kAutoDetectKey, 1, g_configPath.c_str()) != 0;
     g_windowsKeyGuardEnabled = GetPrivateProfileIntW(kConfigSection, kWindowsKeyGuardKey, 0, g_configPath.c_str()) != 0;
+    wchar_t windowsKeyScope[16]{};
+    GetPrivateProfileStringW(kConfigSection, kWindowsKeyGuardScopeKey, L"protected", windowsKeyScope,
+        static_cast<DWORD>(std::size(windowsKeyScope)), g_configPath.c_str());
+    g_windowsKeyGuardScope = _wcsicmp(windowsKeyScope, L"always") == 0
+        ? WindowsKeyGuardScope::Always
+        : WindowsKeyGuardScope::ProtectedForeground;
     g_notificationsEnabled = GetPrivateProfileIntW(kConfigSection, kNotificationsKey, 1, g_configPath.c_str()) != 0;
     g_overlayNotificationsEnabled = GetPrivateProfileIntW(kConfigSection, kOverlayNotificationsKey, 1, g_configPath.c_str()) != 0;
 
@@ -225,9 +369,28 @@ void LoadConfig()
     GetPrivateProfileStringW(kConfigSection, kGamePathsKey, L"", pathBuffer, static_cast<DWORD>(std::size(pathBuffer)), g_configPath.c_str());
     g_gameExePaths = SplitGamePaths(pathBuffer);
 
+    wchar_t profileBuffer[32768]{};
+    GetPrivateProfileStringW(kConfigSection, kGameProfilesKey, L"", profileBuffer,
+        static_cast<DWORD>(std::size(profileBuffer)), g_configPath.c_str());
+    g_gameProfiles = SplitGameProfiles(profileBuffer);
+
+    bool configMigrated = false;
     if (g_gameExeNames.empty())
     {
         g_gameExeNames = { L"r5apex.exe", L"apex.exe", L"legend.exe", L"mir2.exe", L"mir3.exe" };
+        configMigrated = true;
+    }
+
+    for (const std::wstring& game : g_gameExeNames)
+    {
+        if (!g_gameProfiles.contains(game))
+        {
+            g_gameProfiles[game] = DefaultGameProfile();
+            configMigrated = true;
+        }
+    }
+    if (configMigrated)
+    {
         SaveConfig();
     }
 }
@@ -259,6 +422,7 @@ bool ClearLocalDataAndRegistry()
     g_configPath.clear();
     g_gameExeNames.clear();
     g_gameExePaths.clear();
+    g_gameProfiles.clear();
     return success;
 }
 }

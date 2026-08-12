@@ -2,6 +2,8 @@
 
 #include "../../framework.h"
 
+#include <string>
+
 namespace FFKeyLock
 {
 namespace ContentPanel
@@ -11,6 +13,8 @@ using PaintCallback = void (*)(HWND panel, HDC hdc, const RECT& client, int scro
 using EnsureLayoutCallback = void (*)(HWND panel);
 using ButtonHitTestCallback = int (*)(HWND panel, POINT point, int scrollY);
 using ButtonStateCallback = void (*)(HWND panel, int id, bool hot, bool pressed);
+using ButtonNavigateCallback = int (*)(HWND panel, int currentId, int direction);
+using ButtonAccessibleTextCallback = std::wstring (*)(HWND panel, int id);
 using MouseDownCallback = bool (*)(HWND panel, POINT point, int scrollY);
 using MouseClickCallback = void (*)(HWND panel, POINT point, int scrollY);
 using RightClickCallback = void (*)(HWND panel, POINT point, int scrollY);
@@ -23,6 +27,8 @@ void SetPaintCallback(HWND panel, PaintCallback callback);
 void SetEnsureLayoutCallback(HWND panel, EnsureLayoutCallback callback);
 void SetButtonHitTestCallback(HWND panel, ButtonHitTestCallback callback);
 void SetButtonStateCallback(HWND panel, ButtonStateCallback callback);
+void SetButtonNavigateCallback(HWND panel, ButtonNavigateCallback callback);
+void SetButtonAccessibleTextCallback(HWND panel, ButtonAccessibleTextCallback callback);
 void SetMouseDownCallback(HWND panel, MouseDownCallback callback);
 void SetMouseClickCallback(HWND panel, MouseClickCallback callback);
 void SetRightClickCallback(HWND panel, RightClickCallback callback);
@@ -30,5 +36,6 @@ void SetMouseWheelCallback(HWND panel, MouseWheelCallback callback);
 void Relayout(HWND panel);
 void SetScrollY(HWND panel, int scrollY);
 int ScrollY(HWND panel);
+int FocusedButtonId(HWND panel);
 }
 }
