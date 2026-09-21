@@ -11,6 +11,9 @@ namespace FFKeyLock
 constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr UINT WM_GAME_CHAT_KEY = WM_APP + 2;
 constexpr UINT WM_FOREGROUND_CHANGED = WM_APP + 3;
+constexpr UINT WM_EMERGENCY_UNLOCK = WM_APP + 4;
+constexpr UINT WM_GUARD_FAILED = WM_APP + 5;
+constexpr UINT_PTR TIMER_PAUSE = 3;
 constexpr UINT_PTR TIMER_GAME_DETECT = 1;
 constexpr UINT_PTR TIMER_CHAT_TIMEOUT = 2;
 constexpr UINT DETECT_FALLBACK_INTERVAL_MS = 15000;
@@ -63,6 +66,11 @@ enum class WindowsKeyGuardScope
 
 struct GameProfile
 {
+    bool enabled = true;
+    bool inputGuardEnabled = true;
+    bool keyGuardEnabled = true;
+    bool inheritWindowsKey = false;
+    std::vector<UINT> blockedKeys;
     ProtectedInputLanguage targetLanguage = ProtectedInputLanguage::English;
     std::vector<UINT> chatKeys{ VK_RETURN };
     ChatActivationMode chatMode = ChatActivationMode::Toggle;
@@ -73,35 +81,6 @@ struct GameProfile
 
 extern HINSTANCE g_hInst;
 extern HWND g_hWnd;
-extern HWND g_titleText;
-extern HWND g_subtitleText;
-extern HWND g_appIcon;
-extern HWND g_statusText;
-extern HWND g_statusDetectedText;
-extern HWND g_statusInputText;
-extern HWND g_statusWinKeyText;
-extern HWND g_protectionLabel;
-extern HWND g_protectionStateText;
-extern HWND g_protectionButton;
-extern HWND g_autoDetectLabel;
-extern HWND g_autoDetectStateText;
-extern HWND g_autoDetectButton;
-extern HWND g_startupLabel;
-extern HWND g_startupStateText;
-extern HWND g_startupButton;
-extern HWND g_windowsKeyLabel;
-extern HWND g_windowsKeyStateText;
-extern HWND g_windowsKeyButton;
-extern HWND g_inputLanguageText;
-extern HWND g_switchEnglishButton;
-extern HWND g_switchChineseButton;
-extern HWND g_gameListLabel;
-extern HWND g_gameListHelpButton;
-extern HWND g_addCurrentButton;
-extern HWND g_addFileButton;
-extern HWND g_deleteGameButton;
-extern HWND g_browseProtectedButton;
-extern HWND g_configText;
 extern UINT g_taskbarCreatedMessage;
 extern bool g_protectionEnabled;
 extern bool g_autoDetectEnabled;
@@ -126,4 +105,10 @@ extern std::wstring g_configPath;
 extern std::vector<std::wstring> g_gameExeNames;
 extern std::unordered_map<std::wstring, std::wstring> g_gameExePaths;
 extern std::unordered_map<std::wstring, GameProfile> g_gameProfiles;
+extern bool g_protectionPaused;
+extern ULONGLONG g_pauseUntil;
+extern UINT g_emergencyKey;
+extern std::wstring g_configError;
+extern UINT g_gameSession;
+extern bool g_portableMode;
 }

@@ -85,6 +85,15 @@ jobs:
             throw "Release executable depends on VC++ runtime DLLs. Build must use the static runtime (/MT)."
           }
 
+      - name: Regression tests
+        if: matrix.smoke_test
+        shell: pwsh
+        run: |
+          msbuild tests/FFKeyLock.Tests.vcxproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /m
+          if ($LASTEXITCODE -ne 0) { throw "Test build failed." }
+          & "tests/artifacts/${{ matrix.platform }}/FFKeyLock.Tests.exe" "$PWD/tests/artifacts"
+          if ($LASTEXITCODE -ne 0) { throw "Regression tests failed." }
+
       - name: Smoke test executable startup
         if: matrix.smoke_test
         shell: pwsh

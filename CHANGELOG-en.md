@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## v0.6.0
+
+- Fixed native scrollbar flashes during hover/position updates and duplicate submenu arrows; added immediate-pixel and menu-highlight checks in both themes.
+- Simplified both READMEs and added localized interface screenshots.
+
+- Unified client-area rendering, with a themed client menu bar and native popup menus. The game library and running-app picker share complete background and scrollbar rendering.
+- Scrolling repaints the viewport and children without copying clipped pixels or layered window composition; added visible-window repaint equivalence checks.
+- Separated rendering, scrolling, library, menu and profile editing modules; moved unused legacy UI to archive/legacy-ui outside the build.
+
+- Reworked editor scrolling around a fixed viewport and one content window, with stable control geometry and scrollbar width, DPI-adjusted scroll offsets, precise wheel input and focus scrolling.
+- Unified spacing, typography and blue accents; fixed light backgrounds on dark checkboxes, dropdowns and the editor scrollbar, restored button focus cues, and cached game icons across filtering and theme changes.
+- Standardized the preset name as accidental press protection and added hidden native-window regression checks for layout, scrolling, themes and unsaved drafts.
+
+- Added an accidental press protection preset for F1–F12, Print Screen, Scroll Lock and Pause / Break, with per-key exceptions.
+- Rebuilt the native workspace around a searchable game library and embedded keyboard/profile editor.
+- Added running-window selection, profile copy/paste, library import/export, timed pause, emergency unlock and a local key test.
+- Separated input-language protection from key blocking; chat keeps the selected keys blocked.
+- Moved keyboard interception to a dedicated message thread and preserved down/up pairing across focus changes.
+- Added full-path game identities, versioned INI sections, migration backups and atomic configuration replacement.
+- Fixed global defaults overwriting game profiles, empty libraries repopulating, delayed activation and stale chat events.
+- Retained native accessibility and keyboard navigation; improved DPI layout, high-contrast colors and idle updates.
+- Added portable configuration, background startup and isolated regression coverage.
+
 ## v0.5.0
 
 ### Added

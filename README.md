@@ -1,93 +1,63 @@
 # FFKeyLock
 
+A lightweight Windows utility that prevents accidental key presses in games. Set key-blocking and input-language preferences for each game; its saved profile applies when the game is in front and releases when you switch away.
 
-FFKeyLock is a lightweight Windows tray utility for keeping game input reliable. It listens for foreground-window changes, applies a dedicated profile to each protected executable, and restores the previous input language after the game loses focus.
+[简体中文](README.zh-CN.md) · [Download](https://github.com/brealinxx/FFKeyLock/releases/latest) · [Changelog](CHANGELOG-en.md)
 
-[简体中文](README.zh-CN.md)
+![FFKeyLock English interface: game library and key-blocking profile](Assets/intro_en.png)
 
-## Tech Stack
+## Quick start
 
-- Native Win32 desktop application
-- C++20
-- Windows Shell tray icon APIs
-- Windows input language APIs
-- INI-based user configuration
-- Visual Studio / MSBuild project
-- Inno Setup installer
+1. Download the installer or ZIP for your PC and run FFKeyLock (Windows 10 / 11; x64, x86 or ARM64).
+2. Choose **Choose file** or **Running apps** to add the actual game executable, rather than its launcher.
+3. Apply **Accidental press preset**, then click any keys you need to allow. Turn off **Input language protection** if you only want key blocking.
+4. Select **Save profile** and return to the game. Closing the main window keeps FFKeyLock in the tray; use the menu to exit.
 
-## Why It Is Lightweight
+**Emergency unlock: `Ctrl + Alt + Backspace`.** Settings also offers `Ctrl + Alt + End / Home`. Resume manually after an emergency unlock. Ordinary pauses can last 30 seconds, 5 minutes, or until you resume.
 
-FFKeyLock is built directly on Win32 without a browser runtime, managed framework, or background service. Foreground detection is event-driven through `SetWinEventHook`, with only a low-frequency fallback timer, so the app remains responsive without continuously polling while idle.
+## Features
 
-## Main Features
+- **Per-game key blocking:** the preset covers F1–F12, PrtSc, Scroll Lock and Pause / Break, with individual exceptions and additional function/media keys.
+- **Independent input-language protection:** configure it separately from key blocking. Chat can release input-language control while selected keys remain blocked.
+- **Easy profile management:** search, copy/paste and import/export; full paths distinguish games with the same executable name.
+- **Tray controls:** configurable pause, startup and notifications; Chinese/English, light/dark themes and keyboard navigation.
+- **Native and lightweight:** C++20 / Win32, with no browser runtime, managed framework, background service, driver or code injected into games.
 
-- Gives every protected executable its own target input language, chat keys, chat mode, restore timeout, Windows-key behavior, and notification preference.
-- Uses event-driven foreground detection for faster response and lower idle overhead.
-- Supports customizable chat keys such as Enter, T, Y, and `/`.
-- Supports toggle-to-chat and hold-to-chat modes, with Enter/Esc restoration and per-game timeout fallback.
-- Locks the Windows key only while a protected program is in the foreground by default, with an advanced always-lock scope.
-- Restores the previous input language after leaving a protected program window.
-- Automatically detects known executables from a configurable protected program list.
-- Lets you add the current foreground program or browse for an `.exe` file.
-- Provides a protected program list with selection, scrolling, right-click actions, and folder opening.
-- Provides quick tray controls for protection, auto detection, startup, notifications, and input switching.
-- Provides a modern NVIDIA-inspired overlay positioned above native Windows toast notifications.
-- Supports keyboard navigation for custom controls and respects the Windows reduced-animation setting.
-- Supports Chinese and English UI text from `Settings -> Language`.
-- Can start with Windows for always-on protection.
+Selecting a game edits its profile; protection follows the foreground game. Changes apply after saving, and theme changes retain your draft. The separate global Windows-key policy can optionally block it on the desktop as well.
 
-## Install
+## Configuration and compatibility
 
-Download the latest installer from [GitHub Releases](https://github.com/brealinxx/FFKeyLock/releases/latest):
+Settings are saved to `%APPDATA%\FFKeyLock\config.ini`. Create `portable.ini` beside the executable, or use `--config "C:\path\config.ini"`, for isolated settings. `--background` starts directly in the tray.
 
-```text
-FFKeyLock-Setup-v0.5.0-x64.exe
-```
+Migration preserves a `.v1.bak` copy; invalid configuration is preserved as `.invalid.bak` before a later save. Import merges game profiles while retaining global settings. An intentionally empty library stays empty.
 
-## Build
+The local key test works only while FFKeyLock is in front. Games with anti-cheat, special input paths or elevated privileges require real-game verification; the local test does not guarantee compatibility. Ctrl, Alt and the emergency key remain available.
 
-Open `FFKeyLock.slnx` in Visual Studio, or build with MSBuild:
+## Build and test
+
+Requires Visual Studio C++ toolset **v145**, Windows SDK 10.0 and MSBuild. Open `FFKeyLock.slnx`, or run:
 
 ```powershell
 MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
-MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=Win32 /m
-MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=ARM64 /m
+MSBuild.exe tests/FFKeyLock.Tests.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+tests/artifacts/x64/FFKeyLock.Tests.exe tests/artifacts
 ```
 
-Release executables are generated at:
+The x64 executable is written to `x64/Release/FFKeyLock.exe`. Use `Platform=Win32` or `ARM64` for other architectures with the corresponding tools installed. Tests support x64 / Win32.
 
-```text
-x64/Release/FFKeyLock.exe
-Release/FFKeyLock.exe
-ARM64/Release/FFKeyLock.exe
-```
+<details>
+<summary>Build an installer</summary>
 
-## Package
-
-Install Inno Setup, then compile the installer script:
+Install Inno Setup and build the matching architecture first:
 
 ```powershell
-ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=x64
-ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=x86
-ISCC.exe installer/FFKeyLock.iss /DAppArchitecture=arm64
+ISCC.exe /DAppArchitecture=x64 installer/FFKeyLock.iss
 ```
 
-Installers are generated under `installer/output/` with the target architecture in the file name.
+Supported architecture arguments: `x64`, `x86`, `arm64`. Output: `installer/output/`.
 
-## Configuration
+</details>
 
-User settings are stored in:
+See [verification results and limits](tests/VERIFICATION.md), [maintenance instructions](AGENTS.md) and the [UI architecture guide](FFKeyLock/UI/README.md).
 
-```text
-%APPDATA%\FFKeyLock\config.ini
-```
-
-The config includes global protection settings, Windows-key lock scope, UI language, theme, notification options, the protected executable list, and per-game profiles.
-
-## Changelog
-
-See [CHANGELOG-en.md](CHANGELOG-en.md).
-
-## License
-
-See [LICENSE](LICENSE).
+[MIT License](LICENSE)

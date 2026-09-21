@@ -1,5 +1,5 @@
+#include "UI/Rendering/NativeControls.h"
 #include "MainWindow.h"
-
 #include "AppState.h"
 #include "Config.h"
 #include "GameProtection.h"
@@ -7,2406 +7,268 @@
 #include "Localization.h"
 #include "Logger.h"
 #include "OverlayNotificationManager.h"
-#include "Platform/GdiUtils.h"
 #include "Resource.h"
-#include "UI/Controls/ContentPanel.h"
-#include "UI/Main/MainContentView.h"
-#include "UI/Menu/RoundedMenu.h"
-#include "UI/ProtectedPrograms/ProtectedProgramCommands.h"
-#include "UI/ProtectedPrograms/GameProfileDialog.h"
-#include "UI/ProtectedPrograms/ProtectedProgramListView.h"
+#include "StringUtils.h"
 #include "ThemeManager.h"
 #include "TrayIcon.h"
 #include "Version.h"
 #include "WindowsKeyGuard.h"
-
+#include "UI/Main/MainContentView.h"
+#include "UI/Menu/MenuBar.h"
+#include "UI/Menu/AppMenus.h"
+#include "UI/Menu/PopupMenu.h"
+#include "UI/Rendering/Surface.h"
+#include "UI/Windows/RunningProgramPicker.h"
+#include "UI/Profiles/ProfileEditor.h"
+#include "UI/ProtectedPrograms/ProtectedProgramCommands.h"
+#include <algorithm>
 #include <commdlg.h>
+#include <filesystem>
 #include <shellapi.h>
-#include <strsafe.h>
 #include <windowsx.h>
 
-#include <algorithm>
-#include <filesystem>
-#include <string>
-#include <utility>
-#include <vector>
-
+#pragma comment(lib, "Comdlg32.lib")
 namespace FFKeyLock
 {
 namespace
 {
-constexpr wchar_t kProtectedBrowserClass[] = L"FFKeyLockProtectedBrowser";
-constexpr wchar_t kMenuBarClass[] = L"FFKeyLockMenuBar";
-constexpr wchar_t kGitHubProjectUrl[] = L"https://github.com/brealinxx/FFKeyLock";
-constexpr wchar_t kLatestReleaseUrl[] = L"https://github.com/brealinxx/FFKeyLock/releases/latest";
-HWND g_protectedBrowserWindow = nullptr;
-HWND g_protectedBrowserList = nullptr;
-HWND g_menuBar = nullptr;
-HWND g_contentPanel = nullptr;
-HWND g_statusGroup = nullptr;
-HWND g_featureGroup = nullptr;
-HWND g_inputGroup = nullptr;
-HWND g_programsGroup = nullptr;
-std::vector<RECT> g_menuBarItems;
-int g_menuBarHotIndex = -1;
-int g_menuBarOpenIndex = -1;
-bool g_menuBarMouseTracking = false;
-bool g_isQuitting = false;
-bool g_trayAddCurrentRequested = false;
-bool g_startupEnabled = false;
-int g_scrollY = 0;
-int g_contentHeight = 0;
-
-struct UiButton
-{
-    int id = 0;
-    RECT rect{};
-    std::wstring text;
-    bool hot = false;
-    bool pressed = false;
-    bool enabled = true;
-    bool active = false;
-};
-
-struct ContentLayout
-{
-    RECT icon{};
-    RECT title{};
-    RECT subtitle{};
-    RECT statusCard{};
-    RECT statusTitle{};
-    RECT primaryStatus{};
-    RECT detectedStatus{};
-    RECT inputStatus{};
-    RECT winKeyStatus{};
-    RECT featureCard{};
-    RECT programsCard{};
-    RECT programLabel{};
-    int contentHeight = 0;
-};
-
-ContentLayout g_contentLayout{};
-std::vector<UiButton> g_contentButtons;
-MainContentView g_mainContentView;
-ProtectedProgramListView g_protectedProgramListView;
-
-int Scale(int value)
-{
-    return ThemeManager::Scale(value);
-}
-
-int MenuBarHeight()
-{
-    return Scale(30);
-}
-
-void InvalidateWindow(HWND hwnd)
-{
-    if (!hwnd)
-    {
-        return;
-    }
-
-    InvalidateRect(hwnd, nullptr, TRUE);
-}
-
-void InvalidateWindowAndChildren(HWND hwnd)
-{
-    if (!hwnd)
-    {
-        return;
-    }
-
-    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
-}
-
-void QuitApplication()
-{
-    g_isQuitting = true;
-    RoundedMenu::CloseAll();
-    g_menuBarOpenIndex = -1;
-
-    if (g_hWnd && IsWindow(g_hWnd))
-    {
-        DestroyWindow(g_hWnd);
-    }
-    else
-    {
-        PostQuitMessage(0);
-    }
-}
-
-void InvalidateMenuBarItem(int index)
-{
-    if (!g_menuBar || index < 0 || index >= static_cast<int>(g_menuBarItems.size()))
-    {
-        return;
-    }
-
-    InvalidateRect(g_menuBar, &g_menuBarItems[index], FALSE);
-}
-
-void SetDefaultFont(HWND control)
-{
-    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-}
-
-void ApplyFonts()
-{
-    HWND controls[] = {
-        g_appIcon,
-        g_subtitleText,
-        g_statusText,
-        g_statusDetectedText,
-        g_statusInputText,
-        g_statusWinKeyText,
-        g_protectionLabel,
-        g_protectionStateText,
-        g_protectionButton,
-        g_autoDetectLabel,
-        g_autoDetectStateText,
-        g_autoDetectButton,
-        g_startupLabel,
-        g_startupStateText,
-        g_startupButton,
-        g_windowsKeyLabel,
-        g_windowsKeyStateText,
-        g_windowsKeyButton,
-        g_inputLanguageText,
-        g_switchEnglishButton,
-        g_switchChineseButton,
-        g_gameListLabel,
-        g_gameListHelpButton,
-        g_addCurrentButton,
-        g_addFileButton,
-        g_deleteGameButton,
-        g_browseProtectedButton,
-    };
-
-    if (g_titleText)
-    {
-        SendMessageW(g_titleText, WM_SETFONT, reinterpret_cast<WPARAM>(ThemeManager::TitleFont() ? ThemeManager::TitleFont() : GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-    }
-    for (HWND control : controls)
-    {
-        if (control)
-        {
-            SetDefaultFont(control);
-        }
-    }
-}
-
-void RefreshProtectedBrowserList();
-int LayoutContentControls(HWND panel, int width, int height, int scrollY);
-void EnsureContentLayoutForHitTest(int scrollY);
-void EnsureContentLayoutForHitTest();
-
-RoundedMenuItem MenuItem(UINT id, const std::wstring& text, const std::wstring& shortcut = L"", bool checked = false, bool enabled = true)
-{
-    RoundedMenuItem item{};
-    item.id = id;
-    item.text = text;
-    item.shortcut = shortcut;
-    item.checked = checked;
-    item.enabled = enabled;
-    return item;
-}
-
-RoundedMenuItem MenuTitle(const std::wstring& text)
-{
-    RoundedMenuItem item{};
-    item.text = text;
-    item.title = true;
-    item.enabled = false;
-    return item;
-}
-
-RoundedMenuItem MenuSeparator()
-{
-    RoundedMenuItem item{};
-    item.separator = true;
-    item.enabled = false;
-    return item;
-}
-
-RoundedMenuItem MenuSubmenu(const std::wstring& text, std::vector<RoundedMenuItem> submenu)
-{
-    RoundedMenuItem item{};
-    item.text = text;
-    item.submenu = std::move(submenu);
-    return item;
-}
-
-std::vector<RoundedMenuItem> BuildThemeMenu()
-{
-    return {
-        MenuItem(IDM_THEME_LIGHT, Text(L"浅色", L"Light"), L"", g_themePreference == ThemePreference::Light),
-        MenuItem(IDM_THEME_DARK, Text(L"深色", L"Dark"), L"", g_themePreference == ThemePreference::Dark),
-        MenuItem(IDM_THEME_SYSTEM, Text(L"跟随系统", L"System"), L"", g_themePreference == ThemePreference::System),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildLanguageMenu()
-{
-    return {
-        MenuItem(IDM_LANGUAGE_CHINESE, Text(L"中文", L"Chinese"), L"", g_language == UiLanguage::Chinese),
-        MenuItem(IDM_LANGUAGE_ENGLISH, Text(L"英文", L"English"), L"", g_language == UiLanguage::English),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildWindowsKeyScopeMenu()
-{
-    return {
-        MenuItem(IDM_WINKEY_SCOPE_PROTECTED,
-            Text(L"仅受保护程序在前台时", L"Protected foreground only"), L"",
-            g_windowsKeyGuardScope == WindowsKeyGuardScope::ProtectedForeground),
-        MenuItem(IDM_WINKEY_SCOPE_ALWAYS,
-            Text(L"始终锁定（高级）", L"Always lock (advanced)"), L"",
-            g_windowsKeyGuardScope == WindowsKeyGuardScope::Always),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildSettingsMenu()
-{
-    return {
-        MenuSubmenu(Text(L"语言", L"Language"), BuildLanguageMenu()),
-        MenuSubmenu(Text(L"主题", L"Theme"), BuildThemeMenu()),
-        MenuItem(IDM_OPEN_CONFIG_DIR, Text(L"打开配置目录", L"Open config directory")),
-        MenuItem(IDM_OPEN_LOG_DIR, Text(L"打开日志目录", L"Open log directory")),
-        MenuItem(IDM_STARTUP, Text(L"开机启动", L"Startup"), L"", IsStartupEnabled()),
-        MenuSubmenu(Text(L"Win 键锁定范围", L"Windows key lock scope"), BuildWindowsKeyScopeMenu()),
-        MenuSeparator(),
-        MenuItem(IDM_RESET_CONFIG, Text(L"重置配置", L"Reset config")),
-        MenuItem(IDM_CLEAR_LOCAL_DATA, Text(L"删除本地数据及注册表", L"Delete local data and registry")),
-        MenuSeparator(),
-        MenuItem(IDM_EXIT, Text(L"退出", L"Exit"), L"Alt+F4"),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildNotificationsMenu()
-{
-    return {
-        MenuItem(IDM_TEST_NOTIFICATION, Text(L"显示测试通知", L"Show test notification")),
-        MenuItem(IDM_OVERLAY_NOTIFICATIONS, Text(L"开启 Overlay 通知", L"Enable Overlay notifications"), L"", g_overlayNotificationsEnabled),
-        MenuItem(IDM_NOTIFICATIONS, Text(L"开启系统 Toast 通知", L"Enable system Toast notifications"), L"", g_notificationsEnabled),
-        MenuItem(IDM_MUTE_NOTIFICATIONS, Text(L"静音通知", L"Mute notifications"), L"", !g_notificationsEnabled && !g_overlayNotificationsEnabled),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildHelpMenu()
-{
-    return {
-        MenuItem(IDM_HELP_USAGE, Text(L"使用说明", L"Usage")),
-        MenuItem(IDM_CHECK_UPDATES, Text(L"检查更新", L"Check updates")),
-        MenuItem(IDM_GITHUB_PROJECT, Text(L"GitHub 项目", L"GitHub project")),
-        MenuSeparator(),
-        MenuItem(IDM_ABOUT, Text(L"关于 FFKeyLock", L"About FFKeyLock")),
-    };
-}
-
-std::vector<RoundedMenuItem> BuildTrayMenu()
-{
-    return {
-        MenuTitle(L"FFKeyLock"),
-        MenuItem(IDM_PROTECTION, Text(L"启用保护模式", L"Enable protection mode"), L"", g_protectionEnabled),
-        MenuItem(IDM_AUTO_DETECT, g_autoDetectEnabled ? Text(L"自动检测：开启", L"Auto detect: On") : Text(L"自动检测：关闭", L"Auto detect: Off"), L"", g_autoDetectEnabled),
-        MenuItem(IDM_WINDOWS_KEY_GUARD, g_windowsKeyGuardEnabled ? Text(L"Win 键：禁用", L"Win key: Disabled") : Text(L"Win 键：开启", L"Win key: Enabled"), L"", g_windowsKeyGuardEnabled),
-        MenuSeparator(),
-        MenuItem(IDM_ADD_CURRENT_GAME, Text(L"添加当前程序", L"Add current program")),
-        MenuItem(IDM_SHOW_WINDOW, Text(L"显示主窗口", L"Show main window")),
-        MenuItem(IDM_EXIT, Text(L"退出", L"Exit")),
-    };
-}
-
-void OpenFolderPath(const std::wstring& path)
-{
-    if (!path.empty())
-    {
-        ShellExecuteW(g_hWnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    }
-}
-
-bool OpenExternalUrl(HWND owner, const wchar_t* url)
-{
-    const HINSTANCE result = ShellExecuteW(owner, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
-    if (reinterpret_cast<INT_PTR>(result) > 32)
-    {
-        return true;
-    }
-
-    MessageBoxW(owner,
-        Text(L"无法打开浏览器，请稍后手动访问该链接。", L"Unable to open the browser. Please visit the link manually later."),
-        L"FFKeyLock",
-        MB_OK | MB_ICONWARNING);
-    return false;
-}
-
-void OpenLatestReleasePage(HWND owner)
-{
-    const std::wstring message =
-        std::wstring(Text(L"当前版本：", L"Current version: ")) +
-        FFKEYLOCK_VERSION_TEXT_W +
-        Text(L"\n\n将打开 GitHub Releases 页面查看最新版本。", L"\n\nOpen the GitHub Releases page to view the latest version.");
-
-    if (MessageBoxW(owner,
-        message.c_str(),
-        Text(L"检查更新", L"Check updates"),
-        MB_OKCANCEL | MB_ICONINFORMATION) == IDOK)
-    {
-        OpenExternalUrl(owner, kLatestReleaseUrl);
-    }
-}
-
-void OpenConfigDirectory()
-{
-    std::filesystem::path path(g_configPath);
-    OpenFolderPath(path.has_parent_path() ? path.parent_path().wstring() : std::filesystem::current_path().wstring());
-}
-
-void OpenLogDirectory()
-{
-    const std::wstring logDirectory = GetLogDirectory();
-    if (!logDirectory.empty())
-    {
-        Log(LogLevel::Info, L"Opening log directory: " + logDirectory);
-        std::error_code ignored;
-        std::filesystem::create_directories(logDirectory, ignored);
-        OpenFolderPath(logDirectory);
-    }
-}
-
-void ShowMenuBarPopup(int index)
-{
-    if (!g_menuBar || index < 0 || index >= static_cast<int>(g_menuBarItems.size()))
-    {
-        return;
-    }
-    if (g_menuBarOpenIndex == index)
-    {
-        return;
-    }
-
-    std::vector<RoundedMenuItem> items;
-    if (index == 0)
-    {
-        items = BuildSettingsMenu();
-    }
-    else if (index == 1)
-    {
-        items = BuildNotificationsMenu();
-    }
-    else
-    {
-        items = BuildHelpMenu();
-    }
-
-    POINT anchor{ g_menuBarItems[index].left, g_menuBarItems[index].bottom };
-    ClientToScreen(g_menuBar, &anchor);
-    const int oldOpenIndex = g_menuBarOpenIndex;
-    RoundedMenu::CloseAll();
-    g_menuBarOpenIndex = index;
-    InvalidateMenuBarItem(oldOpenIndex);
-    InvalidateMenuBarItem(index);
-    RoundedMenu::ShowAndDispatch(g_hWnd, anchor, items, false, false);
-    if (g_menuBarOpenIndex == index)
-    {
-        g_menuBarOpenIndex = -1;
-        InvalidateMenuBarItem(index);
-    }
-}
-
-int HitTestMenuBarItem(POINT point)
-{
-    for (size_t i = 0; i < g_menuBarItems.size(); ++i)
-    {
-        if (PtInRect(&g_menuBarItems[i], point))
-        {
-            return static_cast<int>(i);
-        }
-    }
-    return -1;
-}
-
-void PaintMenuBar(HWND hwnd)
-{
-    PAINTSTRUCT paint{};
-    HDC hdc = BeginPaint(hwnd, &paint);
-    RECT client{};
-    GetClientRect(hwnd, &client);
-    GdiUtils::BufferedPaint buffer(hdc, client);
-    HDC drawDc = buffer.Dc();
-    HBRUSH background = CreateSolidBrush(ThemeManager::MenuBarColor());
-    FillRect(drawDc, &client, background);
-    DeleteObject(background);
-
-    HPEN linePen = CreatePen(PS_SOLID, 1, ThemeManager::MenuBorderColor());
-    HGDIOBJ oldPen = SelectObject(drawDc, linePen);
-    MoveToEx(drawDc, client.left, client.bottom - 1, nullptr);
-    LineTo(drawDc, client.right, client.bottom - 1);
-    SelectObject(drawDc, oldPen);
-    DeleteObject(linePen);
-
-    const wchar_t* labels[] = {
-        Text(L"设置", L"Settings"),
-        Text(L"通知", L"Notifications"),
-        Text(L"帮助", L"Help"),
-    };
-
-    SetBkMode(drawDc, TRANSPARENT);
-    SetTextColor(drawDc, ThemeManager::TextColor());
-    HGDIOBJ oldFont = SelectObject(drawDc, ThemeManager::UiFont() ? ThemeManager::UiFont() : GetStockObject(DEFAULT_GUI_FONT));
-    g_menuBarItems.clear();
-    int x = Scale(8);
-    for (const auto* label : labels)
-    {
-        SIZE size{};
-        GetTextExtentPoint32W(drawDc, label, static_cast<int>(wcslen(label)), &size);
-        RECT rect{ x, Scale(3), x + size.cx + Scale(24), client.bottom - Scale(3) };
-        g_menuBarItems.push_back(rect);
-        if (static_cast<int>(g_menuBarItems.size()) - 1 == g_menuBarHotIndex ||
-            static_cast<int>(g_menuBarItems.size()) - 1 == g_menuBarOpenIndex)
-        {
-            HBRUSH hover = CreateSolidBrush(ThemeManager::MenuBarHoverColor());
-            FillRect(drawDc, &rect, hover);
-            DeleteObject(hover);
-        }
-        RECT textRect = rect;
-        textRect.left += Scale(12);
-        textRect.right -= Scale(12);
-        DrawTextW(drawDc, label, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        x = rect.right + Scale(2);
-    }
-    SelectObject(drawDc, oldFont);
-    buffer.Present();
-    EndPaint(hwnd, &paint);
-}
-
-LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    switch (message)
-    {
-    case WM_PAINT:
-        PaintMenuBar(hwnd);
-        return 0;
-
-    case WM_ERASEBKGND:
-    {
-        RECT client{};
-        GetClientRect(hwnd, &client);
-        FillRect(reinterpret_cast<HDC>(wParam), &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-        return TRUE;
-    }
-
-    case WM_MOUSEMOVE:
-    {
-        if (!g_menuBarMouseTracking)
-        {
-            TRACKMOUSEEVENT track{};
-            track.cbSize = sizeof(track);
-            track.dwFlags = TME_LEAVE;
-            track.hwndTrack = hwnd;
-            g_menuBarMouseTracking = TrackMouseEvent(&track) != FALSE;
-        }
-
-        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        const int nextHot = HitTestMenuBarItem(point);
-        if (g_menuBarHotIndex != nextHot)
-        {
-            const int oldHot = g_menuBarHotIndex;
-            g_menuBarHotIndex = nextHot;
-            if (oldHot >= 0 && oldHot < static_cast<int>(g_menuBarItems.size()))
-            {
-                InvalidateRect(hwnd, &g_menuBarItems[oldHot], FALSE);
-            }
-            if (nextHot >= 0 && nextHot < static_cast<int>(g_menuBarItems.size()))
-            {
-                InvalidateRect(hwnd, &g_menuBarItems[nextHot], FALSE);
-            }
-        }
-        if (nextHot >= 0)
-        {
-            ShowMenuBarPopup(nextHot);
-        }
-        return 0;
-    }
-
-    case WM_MOUSELEAVE:
-    {
-        g_menuBarMouseTracking = false;
-        const int oldHot = g_menuBarHotIndex;
-        g_menuBarHotIndex = -1;
-        if (oldHot >= 0 && oldHot < static_cast<int>(g_menuBarItems.size()))
-        {
-            InvalidateRect(hwnd, &g_menuBarItems[oldHot], FALSE);
-        }
-        return 0;
-    }
-
-    case WM_LBUTTONUP:
-    {
-        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        ShowMenuBarPopup(HitTestMenuBarItem(point));
-        return 0;
-    }
-    }
-
-    return DefWindowProcW(hwnd, message, wParam, lParam);
-}
-
-void EnsureMenuBarClass()
-{
-    static bool registered = false;
-    if (registered)
-    {
-        return;
-    }
-
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = MenuBarProc;
-    wc.hInstance = g_hInst;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr;
-    wc.lpszClassName = kMenuBarClass;
-    RegisterClassExW(&wc);
-    registered = true;
-}
-
-void CreateMenuBar(HWND parent)
-{
-    EnsureMenuBarClass();
-    g_menuBar = CreateWindowExW(
-        0,
-        kMenuBarClass,
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0,
-        0,
-        0,
-        MenuBarHeight(),
-        parent,
-        nullptr,
-        g_hInst,
-        nullptr);
-}
-
-bool EffectiveWindowsKeyLock()
-{
-    if (g_windowsKeyGuardScope == WindowsKeyGuardScope::Always)
-    {
-        return g_windowsKeyGuardEnabled;
-    }
-    return g_inGameProtection && !g_activeGameExeName.empty() &&
-        GetGameProfileForExe(g_activeGameExeName).lockWindowsKey;
-}
-
-std::wstring WindowsKeyStatusText()
-{
-    std::wstring status = EffectiveWindowsKeyLock() ? Text(L"已开启", L"On") : Text(L"未开启", L"Off");
-    status += g_windowsKeyGuardScope == WindowsKeyGuardScope::Always
-        ? Text(L" · 始终", L" · Always")
-        : Text(L" · 仅游戏前台", L" · Game foreground only");
-    return status;
-}
-
-std::wstring BuildStatusText()
-{
-    std::wstring status = Text(L"当前状态：", L"Status: ");
-    if (g_chatInputSuspended)
-    {
-        status += Text(L"聊天输入中", L"Chat input");
-    }
-    else
-    {
-        status += g_inGameProtection ? Text(L"游戏保护中", L"Protecting game") : Text(L"普通", L"Normal");
-    }
-    status += Text(L"    保护模式：", L"    Protection: ");
-    status += g_protectionEnabled ? Text(L"开启", L"On") : Text(L"关闭", L"Off");
-    status += Text(L"    自动检测：", L"    Auto detect: ");
-    status += g_autoDetectEnabled ? Text(L"开启", L"On") : Text(L"关闭", L"Off");
-    status += Text(L"    Win 键：", L"    Windows key: ");
-    status += WindowsKeyStatusText();
-    return status;
-}
-
-std::wstring BuildPrimaryStatusText()
-{
-    if (g_chatInputSuspended)
-    {
-        return Text(L"[CHAT] 聊天输入中", L"[CHAT] Chat input");
-    }
-    return g_inGameProtection ? Text(L"[ON] 保护中", L"[ON] Protecting") : Text(L"[IDLE] 待机中", L"[IDLE] Standing by");
-}
-
-std::wstring EnabledText(bool enabled)
-{
-    return enabled ? Text(L"已开启", L"On") : Text(L"未开启", L"Off");
-}
-
-std::wstring SwitchActionText(bool enabled)
-{
-    return enabled ? Text(L"关闭", L"Turn off") : Text(L"开启", L"Turn on");
-}
-
-std::wstring CurrentInputLanguageText()
-{
-    HWND targetWindow = GetCommandTargetWindow();
-    if (!targetWindow)
-    {
-        targetWindow = GetForegroundWindow();
-    }
-
-    DWORD threadId = targetWindow ? GetWindowThreadProcessId(targetWindow, nullptr) : 0;
-    HKL layout = threadId ? GetKeyboardLayout(threadId) : GetKeyboardLayout(0);
-    const LANGID language = LOWORD(reinterpret_cast<UINT_PTR>(layout));
-    const WORD primaryLanguage = PRIMARYLANGID(language);
-    if (primaryLanguage == LANG_CHINESE)
-    {
-        return Text(L"中文", L"Chinese");
-    }
-    if (primaryLanguage == LANG_ENGLISH)
-    {
-        return Text(L"英文", L"English");
-    }
-    return Text(L"未知", L"Unknown");
-}
-
-std::wstring StatusLine(const wchar_t* chineseLabel, const wchar_t* englishLabel, const std::wstring& value)
-{
-    return std::wstring(Text(chineseLabel, englishLabel)) + value;
-}
-
-void RefreshGameList()
-{
-    g_mainContentView.Refresh();
-    g_protectedProgramListView.Refresh();
-    InvalidateWindow(g_contentPanel);
-    RefreshProtectedBrowserList();
-}
-
-std::wstring GetSelectedGameName()
-{
-    return g_protectedProgramListView.SelectedName();
-}
-
-std::wstring GetSelectedBrowserGameName()
-{
-    if (!g_protectedBrowserList)
-    {
-        return L"";
-    }
-
-    const int selected = static_cast<int>(SendMessageW(g_protectedBrowserList, LB_GETCURSEL, 0, 0));
-    if (selected == LB_ERR || selected < 0 || selected >= static_cast<int>(g_gameExeNames.size()))
-    {
-        return L"";
-    }
-
-    return g_gameExeNames[selected];
-}
-
-RECT VisualRect(const RECT& logicalRect, int scrollY)
-{
-    RECT rect = logicalRect;
-    OffsetRect(&rect, 0, -scrollY);
-    return rect;
-}
-
-void DrawPanelText(HDC hdc, const std::wstring& text, RECT rect, COLORREF color, HFONT font, UINT format)
-{
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, color);
-    GdiUtils::SelectObjectScope fontScope(hdc, font ? font : GetStockObject(DEFAULT_GUI_FONT));
-    DrawTextW(hdc, text.c_str(), -1, &rect, format);
-}
-
-int MeasureTitleTextWidth(HWND hwnd, const std::wstring& text)
-{
-    HDC hdc = GetDC(hwnd);
-    if (!hdc)
-    {
-        return Scale(120);
-    }
-
-    GdiUtils::SelectObjectScope fontScope(hdc, ThemeManager::TitleFont() ? ThemeManager::TitleFont() : GetStockObject(DEFAULT_GUI_FONT));
-    SIZE size{};
-    GetTextExtentPoint32W(hdc, text.c_str(), static_cast<int>(text.size()), &size);
-    ReleaseDC(hwnd, hdc);
-    return size.cx;
-}
-
-UiButton* FindContentButton(int id)
-{
-    auto it = std::find_if(g_contentButtons.begin(), g_contentButtons.end(), [id](const UiButton& button) {
-        return button.id == id;
-    });
-    return it == g_contentButtons.end() ? nullptr : &(*it);
-}
-
-void AddContentButton(int id, const RECT& rect, const std::wstring& text, bool enabled = true, bool active = false)
-{
-    UiButton button{};
-    button.id = id;
-    button.rect = rect;
-    button.text = text;
-    button.enabled = enabled;
-    button.active = active;
-    if (const UiButton* oldButton = FindContentButton(id))
-    {
-        button.hot = oldButton->hot;
-        button.pressed = oldButton->pressed;
-    }
-    g_contentButtons.push_back(std::move(button));
-}
-
-void DrawPanelButton(HDC hdc, const UiButton& button, int scrollY)
-{
-    RECT rect = VisualRect(button.rect, scrollY);
-    const bool active = button.active;
-    const bool primary = button.id == IDC_ADD_GAME_BUTTON;
-    COLORREF fill = ThemeManager::ButtonColor();
-    COLORREF border = ThemeManager::BorderColor();
-    COLORREF textColor = button.enabled ? ThemeManager::TextColor() : ThemeManager::DisabledTextColor();
-    if (!button.enabled)
-    {
-        fill = ThemeManager::SurfaceColor();
-    }
-    else if (button.pressed)
-    {
-        fill = ThemeManager::ButtonPressedColor();
-    }
-    else if (button.hot)
-    {
-        fill = ThemeManager::ButtonHotColor();
-    }
-
-    if (button.enabled && (active || primary))
-    {
-        border = ThemeManager::AccentColor();
-        if (!button.pressed)
-        {
-            fill = ThemeManager::IsDark() ? RGB(39, 52, 29) : RGB(236, 247, 224);
-        }
-        if (active && !primary)
-        {
-            textColor = ThemeManager::AccentColor();
-        }
-    }
-    else if (button.enabled && button.hot)
-    {
-        border = ThemeManager::AccentColor();
-    }
-
-    if (button.pressed)
-    {
-        OffsetRect(&rect, 0, Scale(1));
-    }
-    else
-    {
-        RECT shadow = rect;
-        OffsetRect(&shadow, 0, Scale(1));
-        const COLORREF shadowColor = ThemeManager::IsDark() ? RGB(12, 13, 14) : RGB(221, 224, 226);
-        GdiUtils::FillRoundRect(hdc, shadow, shadowColor, shadowColor, Scale(9));
-    }
-
-    const int radius = button.id == IDC_GAME_LIST_HELP ? Scale(15) : Scale(9);
-    GdiUtils::FillRoundRect(hdc, rect, fill, border, radius);
-    DrawPanelText(hdc, button.text, rect, textColor,
-        ThemeManager::UiFont(), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    if (g_contentPanel && GetFocus() == g_contentPanel &&
-        ContentPanel::FocusedButtonId(g_contentPanel) == button.id)
-    {
-        RECT focus = rect;
-        InflateRect(&focus, -Scale(3), -Scale(3));
-        HPEN focusPen = CreatePen(PS_SOLID, std::max(1, Scale(2)), ThemeManager::AccentColor());
-        HGDIOBJ oldPen = SelectObject(hdc, focusPen);
-        HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        RoundRect(hdc, focus.left, focus.top, focus.right, focus.bottom, Scale(8), Scale(8));
-        SelectObject(hdc, oldBrush);
-        SelectObject(hdc, oldPen);
-        DeleteObject(focusPen);
-        DrawFocusRect(hdc, &focus);
-    }
-}
-
-void DrawCard(HDC hdc, const RECT& logicalRect, int scrollY, const std::wstring& title)
-{
-    RECT rect = VisualRect(logicalRect, scrollY);
-    RECT shadow = rect;
-    OffsetRect(&shadow, 0, Scale(2));
-    const COLORREF shadowColor = ThemeManager::IsDark() ? RGB(12, 13, 14) : RGB(223, 226, 228);
-    GdiUtils::FillRoundRect(hdc, shadow, shadowColor, shadowColor, Scale(12));
-    GdiUtils::FillRoundRect(hdc, rect, ThemeManager::SurfaceColor(), ThemeManager::BorderColor(), Scale(12));
-    if (title.empty())
-    {
-        return;
-    }
-
-    RECT accentRect{
-        rect.left + Scale(16),
-        rect.top + Scale(15),
-        rect.left + Scale(19),
-        rect.top + Scale(29)
-    };
-    GdiUtils::FillRoundRect(hdc, accentRect, ThemeManager::AccentColor(), ThemeManager::AccentColor(), Scale(2));
-    RECT titleRect = rect;
-    titleRect.left += Scale(27);
-    titleRect.right -= Scale(16);
-    titleRect.top += Scale(10);
-    titleRect.bottom = titleRect.top + Scale(24);
-    DrawPanelText(hdc, title, titleRect, ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-}
-
-void DrawFeatureRow(HDC hdc, int scrollY, int labelX, int labelWidth, int stateX, int stateWidth, int y, const std::wstring& label, const std::wstring& value)
-{
-    RECT labelRect{ labelX, y, labelX + labelWidth, y + Scale(24) };
-    RECT stateRect{ stateX, y, stateX + stateWidth, y + Scale(24) };
-    DrawPanelText(hdc, label, VisualRect(labelRect, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    DrawPanelText(hdc, value, VisualRect(stateRect, scrollY), ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-}
-
-void PaintContentPanel(HWND panel, HDC hdc, const RECT& client, int scrollY)
-{
-    UNREFERENCED_PARAMETER(panel);
-
-    HRGN clipRegion = CreateRectRgn(client.left, client.top, client.right, client.bottom);
-    SelectClipRgn(hdc, clipRegion);
-    DeleteObject(clipRegion);
-
-    DrawPanelText(hdc, L"FFKeyLock", VisualRect(g_contentLayout.title, scrollY), ThemeManager::TextColor(), ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    DrawPanelText(hdc, Text(L"游戏防误触助手", L"Game mis-touch protection assistant"), VisualRect(g_contentLayout.subtitle, scrollY),
-        ThemeManager::MutedTextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    DrawCard(hdc, g_contentLayout.statusCard, scrollY, Text(L"当前状态", L"Current status"));
-    const bool canShowDetectedGame = g_protectionEnabled && g_autoDetectEnabled && !g_currentDetectedGameName.empty();
-    const std::wstring detectedGame = canShowDetectedGame ? g_currentDetectedGameName : Text(L"无", L"None");
-    const std::wstring inputLanguage = CurrentInputLanguageText();
-    const COLORREF primaryStatusColor = g_inGameProtection ? RGB(84, 190, 120) : ThemeManager::AccentColor();
-    DrawPanelText(hdc, BuildPrimaryStatusText(), VisualRect(g_contentLayout.primaryStatus, scrollY), primaryStatusColor, ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    DrawPanelText(hdc, StatusLine(L"当前检测到：", L"Detected: ", detectedGame), VisualRect(g_contentLayout.detectedStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    DrawPanelText(hdc, StatusLine(L"输入法状态：", L"Input language: ", inputLanguage), VisualRect(g_contentLayout.inputStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    DrawPanelText(hdc, StatusLine(L"Win 键锁定：", L"Win key lock: ", WindowsKeyStatusText()), VisualRect(g_contentLayout.winKeyStatus, scrollY), ThemeManager::TextColor(), ThemeManager::UiFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    DrawCard(hdc, g_contentLayout.featureCard, scrollY, Text(L"功能开关", L"Feature switches"));
-    const int margin = Scale(24);
-    const int contentWidth = g_contentLayout.featureCard.right - g_contentLayout.featureCard.left;
-    const int groupInnerLeft = margin + Scale(20);
-    const int groupRight = margin + contentWidth;
-    const int innerRight = groupRight - Scale(20);
-    const int switchButtonWidth = Scale(92);
-    const int featureLabelWidth = Scale(118);
-    const int featureStateWidth = Scale(54);
-    const int featureInlineGap = Scale(8);
-    const int featureGroupWidth = featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap + switchButtonWidth;
-    const bool twoColumnFeatures = contentWidth >= Scale(680);
-    if (twoColumnFeatures)
-    {
-        const int firstGroupX = groupInnerLeft;
-        const int secondGroupX = innerRight - featureGroupWidth;
-        const int firstStateX = firstGroupX + featureLabelWidth + featureInlineGap;
-        const int secondStateX = secondGroupX + featureLabelWidth + featureInlineGap;
-        DrawFeatureRow(hdc, scrollY, firstGroupX, featureLabelWidth, firstStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
-        DrawFeatureRow(hdc, scrollY, firstGroupX, featureLabelWidth, firstStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
-        DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"开机启动", L"Startup"), EnabledText(g_startupEnabled));
-        DrawFeatureRow(hdc, scrollY, secondGroupX, featureLabelWidth, secondStateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
-    }
-    else
-    {
-        const int groupX = std::min(groupInnerLeft, innerRight - featureGroupWidth);
-        const int stateX = groupX + featureLabelWidth + featureInlineGap;
-        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(34), Text(L"保护模式", L"Protection mode"), EnabledText(g_protectionEnabled));
-        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(78), Text(L"自动检测", L"Auto detect"), EnabledText(g_autoDetectEnabled));
-        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(122), Text(L"开机启动", L"Startup"), EnabledText(g_startupEnabled));
-        DrawFeatureRow(hdc, scrollY, groupX, featureLabelWidth, stateX, featureStateWidth, g_contentLayout.featureCard.top + Scale(166), Text(L"Win 键锁定", L"Win key lock"), EnabledText(g_windowsKeyGuardEnabled));
-    }
-
-    DrawCard(hdc, g_contentLayout.programsCard, scrollY, L"");
-    RECT programAccent = VisualRect(RECT{
-        g_contentLayout.programsCard.left + Scale(16),
-        g_contentLayout.programsCard.top + Scale(15),
-        g_contentLayout.programsCard.left + Scale(19),
-        g_contentLayout.programsCard.top + Scale(29) }, scrollY);
-    GdiUtils::FillRoundRect(hdc, programAccent, ThemeManager::AccentColor(), ThemeManager::AccentColor(), Scale(2));
-    DrawPanelText(hdc, Text(L"受保护程序列表", L"Protected program list"),
-        VisualRect(g_contentLayout.programLabel, scrollY), ThemeManager::TextColor(),
-        ThemeManager::TitleFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    g_protectedProgramListView.Draw(hdc, scrollY);
-
-    for (const UiButton& button : g_contentButtons)
-    {
-        DrawPanelButton(hdc, button, scrollY);
-    }
-    SelectClipRgn(hdc, nullptr);
-}
-
-int HitTestContentPanelButton(HWND, POINT point, int scrollY)
-{
-    POINT logicalPoint{ point.x, point.y + scrollY };
-    for (const UiButton& button : g_contentButtons)
-    {
-        if (button.enabled && PtInRect(&button.rect, logicalPoint))
-        {
-            return button.id;
-        }
-    }
-    return 0;
-}
-
-void SetContentButtonState(HWND, int id, bool hot, bool pressed)
-{
-    if (UiButton* button = FindContentButton(id))
-    {
-        button->hot = hot;
-        button->pressed = pressed;
-    }
-}
-
-void EnsureContentLayoutForHitTest(int scrollY)
-{
-    if (!g_contentPanel)
-    {
-        return;
-    }
-
-    RECT client{};
-    GetClientRect(g_contentPanel, &client);
-    if (client.right <= client.left || client.bottom <= client.top)
-    {
-        return;
-    }
-
-    LayoutContentControls(g_contentPanel, client.right - client.left, client.bottom - client.top, scrollY);
-}
-
-void EnsureContentLayoutForHitTest()
-{
-    EnsureContentLayoutForHitTest(g_scrollY);
-}
-
-void EnsureContentPanelLayoutForHitTest(HWND panel)
-{
-    EnsureContentLayoutForHitTest(ContentPanel::ScrollY(panel));
-}
-
-void ContentPanelClicked(HWND panel, POINT point, int scrollY)
-{
-    EnsureContentLayoutForHitTest(scrollY);
-    g_protectedProgramListView.OnLeftDown(panel, point, scrollY);
-}
-
-bool ContentPanelMouseDown(HWND panel, POINT point, int scrollY)
-{
-    EnsureContentLayoutForHitTest(scrollY);
-    return g_protectedProgramListView.OnLeftDown(panel, point, scrollY);
-}
-
-void ContentPanelRightClicked(HWND panel, POINT clientPoint, int scrollY)
-{
-    EnsureContentLayoutForHitTest(scrollY);
-    g_protectedProgramListView.OnRightUp(panel, clientPoint, scrollY);
-}
-
-bool ContentPanelWheel(HWND panel, POINT point, int scrollY, int delta)
-{
-    return g_protectedProgramListView.OnWheel(panel, point, scrollY, delta);
-}
-
-void CreateMainControls()
-{
-    UpdateMainWindow();
-}
-
-int LayoutContentControls(HWND panel, int width, int height, int scrollY)
-{
-    UNREFERENCED_PARAMETER(panel);
-    {
-        g_scrollY = std::max(0, scrollY);
-        const int viewportHeight = std::max(0, height);
-        const int margin = Scale(24);
-        const int groupSpacing = Scale(18);
-        const int buttonHeight = Scale(32);
-        const int buttonGap = Scale(10);
-        const int switchButtonWidth = Scale(92);
-        const int actionButtonWidth = Scale(130);
-        const int contentWidth = std::max(Scale(320), width - margin * 2);
-        const bool twoColumnFeatures = contentWidth >= Scale(680);
-        const bool wideProgramActions = contentWidth >= Scale(620);
-        const int headerY = Scale(18);
-        const int headerHeight = Scale(80);
-        const int statusY = headerY + headerHeight + groupSpacing;
-        const int statusHeight = Scale(158);
-        const int featureY = statusY + statusHeight + groupSpacing;
-        const int featureHeight = twoColumnFeatures ? Scale(126) : Scale(220);
-        const int programsY = featureY + featureHeight + groupSpacing;
-        const int programsHeight = std::max(wideProgramActions ? Scale(270) : Scale(392), viewportHeight - programsY - margin);
-        g_contentHeight = programsY + programsHeight + margin;
-        const int maxScroll = std::max(0, g_contentHeight - viewportHeight);
-        g_scrollY = std::clamp(g_scrollY, 0, maxScroll);
-
-        const int groupInnerLeft = margin + Scale(20);
-        const int groupRight = margin + contentWidth;
-        const int innerRight = groupRight - Scale(20);
-        const int switchButtonX = innerRight - switchButtonWidth;
-        const int featureLabelWidth = Scale(118);
-        const int featureStateWidth = Scale(54);
-        const int featureInlineGap = Scale(8);
-        const int featureGroupWidth = featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap + switchButtonWidth;
-        const int firstGroupX = twoColumnFeatures ? groupInnerLeft : std::min(groupInnerLeft, innerRight - featureGroupWidth);
-        const int secondGroupX = innerRight - featureGroupWidth;
-        const int firstButtonX = firstGroupX + featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap;
-        const int secondButtonX = secondGroupX + featureLabelWidth + featureInlineGap + featureStateWidth + featureInlineGap;
-        const int listX = groupInnerLeft;
-        const int listY = programsY + Scale(52);
-        const int actionButtonX = wideProgramActions ? groupRight - Scale(20) - actionButtonWidth : listX;
-        const int listWidth = wideProgramActions
-            ? std::max(Scale(260), actionButtonX - Scale(20) - listX)
-            : std::max(Scale(260), groupRight - Scale(20) - listX);
-        const int listHeight = wideProgramActions ? std::max(Scale(128), programsHeight - Scale(74)) : Scale(160);
-        const int actionButtonY = wideProgramActions ? listY : listY + listHeight + Scale(14);
-        const int narrowActionWidth = std::max(Scale(120), (listWidth - buttonGap) / 2);
-        const int programsTitleX = margin + Scale(27);
-        const int programsTitleWidth = MeasureTitleTextWidth(panel, Text(L"受保护程序列表", L"Protected program list"));
-        const int programsHelpX = std::min(
-            programsTitleX + programsTitleWidth + Scale(10),
-            groupRight - Scale(20) - Scale(28));
-
-        g_contentLayout.icon = RECT{};
-        g_contentLayout.title = RECT{ margin, headerY + Scale(8), groupRight, headerY + Scale(38) };
-        g_contentLayout.subtitle = RECT{ margin, headerY + Scale(42), groupRight, headerY + Scale(64) };
-        g_contentLayout.statusCard = RECT{ margin, statusY, margin + contentWidth, statusY + statusHeight };
-        g_contentLayout.primaryStatus = RECT{ groupInnerLeft, statusY + Scale(30), groupInnerLeft + Scale(320), statusY + Scale(60) };
-        g_contentLayout.detectedStatus = RECT{ groupInnerLeft, statusY + Scale(68), groupRight - Scale(20), statusY + Scale(92) };
-        g_contentLayout.inputStatus = RECT{ groupInnerLeft, statusY + Scale(96), groupRight - Scale(20), statusY + Scale(120) };
-        g_contentLayout.winKeyStatus = RECT{ groupInnerLeft, statusY + Scale(124), groupRight - Scale(20), statusY + Scale(148) };
-        g_contentLayout.featureCard = RECT{ margin, featureY, margin + contentWidth, featureY + featureHeight };
-        g_contentLayout.programsCard = RECT{ margin, programsY, margin + contentWidth, programsY + programsHeight };
-        g_contentLayout.programLabel = RECT{ programsTitleX, programsY + Scale(10), programsHelpX - Scale(8), programsY + Scale(34) };
-        g_contentLayout.contentHeight = g_contentHeight;
-        g_protectedProgramListView.SetBounds(RECT{ listX, listY, listX + listWidth, listY + listHeight });
-
-        g_contentButtons.clear();
-        AddContentButton(IDC_PROTECTION_BUTTON, RECT{ firstButtonX, featureY + Scale(28), firstButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_protectionEnabled), true, g_protectionEnabled);
-        AddContentButton(IDC_AUTO_DETECT_BUTTON, RECT{ firstButtonX, featureY + Scale(72), firstButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_autoDetectEnabled), true, g_autoDetectEnabled);
-        if (twoColumnFeatures)
-        {
-            AddContentButton(IDC_STARTUP_BUTTON, RECT{ secondButtonX, featureY + Scale(28), secondButtonX + switchButtonWidth, featureY + Scale(28) + buttonHeight }, SwitchActionText(g_startupEnabled), true, g_startupEnabled);
-            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ secondButtonX, featureY + Scale(72), secondButtonX + switchButtonWidth, featureY + Scale(72) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled), true, g_windowsKeyGuardEnabled);
-        }
-        else
-        {
-            AddContentButton(IDC_STARTUP_BUTTON, RECT{ firstButtonX, featureY + Scale(116), firstButtonX + switchButtonWidth, featureY + Scale(116) + buttonHeight }, SwitchActionText(g_startupEnabled), true, g_startupEnabled);
-            AddContentButton(IDC_WINDOWS_KEY_BUTTON, RECT{ firstButtonX, featureY + Scale(160), firstButtonX + switchButtonWidth, featureY + Scale(160) + buttonHeight }, SwitchActionText(g_windowsKeyGuardEnabled), true, g_windowsKeyGuardEnabled);
-        }
-        AddContentButton(IDC_GAME_LIST_HELP, RECT{ programsHelpX, programsY + Scale(8), programsHelpX + Scale(28), programsY + Scale(36) }, L"?");
-        if (wideProgramActions)
-        {
-            const int actionStep = Scale(39);
-            AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ actionButtonX, listY, actionButtonX + actionButtonWidth, listY + buttonHeight }, Text(L"添加当前程序", L"Add current program"));
-            AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ actionButtonX, listY + actionStep, actionButtonX + actionButtonWidth, listY + actionStep + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
-            AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ actionButtonX, listY + actionStep * 2, actionButtonX + actionButtonWidth, listY + actionStep * 2 + buttonHeight }, Text(L"从文件选择", L"Choose file"));
-            AddContentButton(IDC_EDIT_GAME_PROFILE_BUTTON, RECT{ actionButtonX, listY + actionStep * 3, actionButtonX + actionButtonWidth, listY + actionStep * 3 + buttonHeight }, Text(L"游戏独立配置", L"Game profile"));
-            AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ actionButtonX, listY + actionStep * 4, actionButtonX + actionButtonWidth, listY + actionStep * 4 + buttonHeight }, Text(L"删除选中", L"Delete selected"));
-        }
-        else
-        {
-            const int secondActionX = listX + narrowActionWidth + buttonGap;
-            const int actionStep = Scale(40);
-            AddContentButton(IDC_ADD_GAME_BUTTON, RECT{ listX, actionButtonY, listX + narrowActionWidth, actionButtonY + buttonHeight }, Text(L"添加当前程序", L"Add current program"));
-            AddContentButton(IDC_BROWSE_PROTECTED_BUTTON, RECT{ secondActionX, actionButtonY, secondActionX + narrowActionWidth, actionButtonY + buttonHeight }, Text(L"浏览运行中程序", L"Browse running"));
-            AddContentButton(IDC_ADD_FILE_BUTTON, RECT{ listX, actionButtonY + actionStep, listX + narrowActionWidth, actionButtonY + actionStep + buttonHeight }, Text(L"从文件选择", L"Choose file"));
-            AddContentButton(IDC_EDIT_GAME_PROFILE_BUTTON, RECT{ secondActionX, actionButtonY + actionStep, secondActionX + narrowActionWidth, actionButtonY + actionStep + buttonHeight }, Text(L"游戏独立配置", L"Game profile"));
-            AddContentButton(IDC_DELETE_GAME_BUTTON, RECT{ listX, actionButtonY + actionStep * 2, listX + narrowActionWidth, actionButtonY + actionStep * 2 + buttonHeight }, Text(L"删除选中", L"Delete selected"));
-        }
-
-        g_protectedProgramListView.Refresh();
-        return g_contentHeight;
-    }
-}
-
-void ResizeMainControls(int width, int height)
-{
-    const int menuHeight = MenuBarHeight();
-    if (g_menuBar)
-    {
-        SetWindowPos(g_menuBar, HWND_TOP, 0, 0, width, menuHeight, SWP_NOACTIVATE);
-        InvalidateWindow(g_menuBar);
-    }
-    if (g_contentPanel)
-    {
-        SetWindowPos(g_contentPanel, nullptr, 0, menuHeight, width, std::max(0, height - menuHeight), SWP_NOZORDER | SWP_NOACTIVATE);
-        ContentPanel::Relayout(g_contentPanel);
-        InvalidateRect(g_contentPanel, nullptr, TRUE);
-    }
-}
-
-void ApplyTheme()
-{
-    ThemeManager::Initialize(GetDpiForWindow(g_hWnd));
-    ThemeManager::ApplyTheme(g_hWnd);
-    ApplyFonts();
-    if (g_protectedBrowserWindow)
-    {
-        ThemeManager::ApplyTheme(g_protectedBrowserWindow);
-    }
-    if (g_hWnd)
-    {
-        RedrawWindow(g_hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
-    }
-}
-
-bool IsOwnWindow(HWND hwnd)
-{
-    return hwnd && g_hWnd && GetAncestor(hwnd, GA_ROOT) == g_hWnd;
-}
-
-bool IsExplorerShellWindowClass(const wchar_t* className)
-{
-    return _wcsicmp(className, L"Shell_TrayWnd") == 0 ||
-        _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0 ||
-        _wcsicmp(className, L"NotifyIconOverflowWindow") == 0 ||
-        _wcsicmp(className, L"Progman") == 0 ||
-        _wcsicmp(className, L"WorkerW") == 0;
-}
-
-bool IsExplorerProcess(HWND hwnd)
-{
-    DWORD processId = 0;
-    GetWindowThreadProcessId(hwnd, &processId);
-    if (!processId)
-    {
-        return false;
-    }
-
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
-    if (!process)
-    {
-        return false;
-    }
-
-    std::wstring path(MAX_PATH, L'\0');
-    DWORD size = static_cast<DWORD>(path.size());
-    const bool queried = QueryFullProcessImageNameW(process, 0, path.data(), &size) != FALSE;
-    CloseHandle(process);
-    if (!queried)
-    {
-        return false;
-    }
-
-    path.resize(size);
-    const std::wstring exeName = std::filesystem::path(path).filename().wstring();
-    const wchar_t* blockedShellProcesses[] = {
-        L"explorer.exe",
-        L"shellexperiencehost.exe",
-        L"startmenuexperiencehost.exe",
-        L"searchhost.exe",
-        L"textinputhost.exe",
-        L"applicationframehost.exe",
-        L"runtimebroker.exe",
-    };
-
-    for (const wchar_t* blockedProcess : blockedShellProcesses)
-    {
-        if (_wcsicmp(exeName.c_str(), blockedProcess) == 0)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool IsAddableExternalWindow(HWND hwnd)
-{
-    if (!hwnd || !IsWindow(hwnd) || IsOwnWindow(hwnd))
-    {
-        return false;
-    }
-
-    HWND root = GetAncestor(hwnd, GA_ROOT);
-    if (root && root != hwnd)
-    {
-        hwnd = root;
-    }
-
-    if (!IsWindowVisible(hwnd))
-    {
-        return false;
-    }
-
-    wchar_t className[64]{};
-    GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
-    if (IsExplorerShellWindowClass(className) || IsExplorerProcess(hwnd))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-HWND FindRecentAddableExternalWindow()
-{
-    for (HWND hwnd = GetTopWindow(nullptr); hwnd; hwnd = GetWindow(hwnd, GW_HWNDNEXT))
-    {
-        if (IsAddableExternalWindow(hwnd))
-        {
-            return GetAncestor(hwnd, GA_ROOT);
-        }
-    }
-
-    return nullptr;
-}
-
-void AddGameFromFileDialog()
-{
-    wchar_t path[MAX_PATH]{};
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = g_hWnd;
-    ofn.lpstrFilter = IsEnglish()
-        ? L"Executable files (*.exe)\0*.exe\0All files (*.*)\0*.*\0"
-        : L"可执行文件 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0";
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = static_cast<DWORD>(std::size(path));
-    ofn.lpstrTitle = Text(L"选择受保护程序", L"Select protected executable");
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-
-    if (GetOpenFileNameW(&ofn))
-    {
-        AddGameExeName(path);
-    }
-}
-
-void DeleteSelectedGame()
-{
-    g_protectedProgramListView.DeleteSelected();
-    RefreshGameList();
-}
-
-int NavigateContentPanelButton(HWND, int currentId, int direction)
-{
-    if (g_contentButtons.empty())
-    {
-        return 0;
-    }
-    int currentIndex = -1;
-    for (int index = 0; index < static_cast<int>(g_contentButtons.size()); ++index)
-    {
-        if (g_contentButtons[index].id == currentId)
-        {
-            currentIndex = index;
-            break;
-        }
-    }
-    const int step = direction < 0 ? -1 : 1;
-    if (currentIndex < 0 && step < 0)
-    {
-        currentIndex = 0;
-    }
-    for (int offset = 1; offset <= static_cast<int>(g_contentButtons.size()); ++offset)
-    {
-        const int index = (currentIndex + step * offset +
-            static_cast<int>(g_contentButtons.size()) * 2) % static_cast<int>(g_contentButtons.size());
-        if (g_contentButtons[index].enabled)
-        {
-            const int nextId = g_contentButtons[index].id;
-            if (g_contentPanel)
-            {
-                RECT client{};
-                GetClientRect(g_contentPanel, &client);
-                const int currentScroll = ContentPanel::ScrollY(g_contentPanel);
-                const RECT bounds = g_contentButtons[index].rect;
-                if (bounds.top < currentScroll + Scale(8))
-                {
-                    ContentPanel::SetScrollY(g_contentPanel,
-                        static_cast<int>(std::max<LONG>(0, bounds.top - Scale(8))));
-                }
-                else if (bounds.bottom > currentScroll + client.bottom - Scale(8))
-                {
-                    ContentPanel::SetScrollY(g_contentPanel,
-                        bounds.bottom - client.bottom + Scale(8));
-                }
-            }
-            return nextId;
-        }
-    }
-    return 0;
-}
-
-std::wstring ContentPanelButtonAccessibleText(HWND, int id)
-{
-    const UiButton* button = FindContentButton(id);
-    return button ? button->text + Text(L"，按钮", L", button") : std::wstring{};
-}
-
-void EditSelectedGameProfile()
-{
-    const std::wstring exeName = GetSelectedGameName();
-    if (exeName.empty())
-    {
-        MessageBoxW(g_hWnd,
-            Text(L"请先选择一个受保护程序。", L"Select a protected program first."),
-            L"FFKeyLock", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-
-    const GameProfile current = GetGameProfileForExe(exeName);
-    GameProfile updated{};
-    if (GameProfileDialog::Show(g_hWnd, exeName, current, updated))
-    {
-        SetGameProfileForExe(exeName, std::move(updated));
-        RefreshGameList();
-    }
-}
-
-void CopyTextToClipboard(const std::wstring& text)
-{
-    ProtectedProgramCommands::CopyNameToClipboard(g_hWnd, text);
-}
-
-void OpenGameFolder(const std::wstring& exeName)
-{
-    const auto path = g_gameExePaths.find(exeName);
-    ProtectedProgramCommands::OpenProgramFolder(g_hWnd, exeName, path == g_gameExePaths.end() ? L"" : path->second);
-}
-
-void OpenSelectedGameFolder()
-{
-    OpenGameFolder(GetSelectedGameName());
-}
-
-void RefreshProtectedBrowserList()
-{
-    if (!g_protectedBrowserList)
-    {
-        return;
-    }
-
-    SendMessageW(g_protectedBrowserList, LB_RESETCONTENT, 0, 0);
-    for (const auto& game : g_gameExeNames)
-    {
-        std::wstring item = game;
-        const auto path = g_gameExePaths.find(game);
-        if (path != g_gameExePaths.end() && !path->second.empty())
-        {
-            item += L"    ";
-            item += path->second;
-        }
-        SendMessageW(g_protectedBrowserList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item.c_str()));
-    }
-}
-
-void PaintWindowBackground(HWND hwnd)
-{
-    PAINTSTRUCT paint{};
-    HDC hdc = BeginPaint(hwnd, &paint);
-    RECT client{};
-    GetClientRect(hwnd, &client);
-    GdiUtils::BufferedPaint buffer(hdc, client);
-    FillRect(buffer.Dc(), &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-    buffer.Present();
-    EndPaint(hwnd, &paint);
-}
-
-LRESULT CALLBACK ProtectedBrowserProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
+MainContentView g_view;
+UI::MenuBar g_menuBar;
+bool g_quitting = false;
+bool g_destroying = false;
+bool g_dirtyView = false;
+
+bool External(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) return false;
+    DWORD pid = 0; GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid || pid == GetCurrentProcessId()) return false;
+    const auto name = GetExeNameFromPath(GetProgramPath(hwnd));
+    return !name.empty() && name != L"explorer.exe" && name != L"shellexperiencehost.exe" && name != L"startmenuexperiencehost.exe";
+}
+void BuildMenus() { g_menuBar.SetMenu(UI::CreateAppMenu()); }
+
+std::wstring ChooseFile(bool save, bool exe)
+{
+    wchar_t path[32768]{};
+    if (save) wcscpy_s(path,L"FFKeyLock-profiles.ini");
+    OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = g_hWnd;
+    dialog.lpstrFile = path; dialog.nMaxFile = static_cast<DWORD>(std::size(path));
+    dialog.lpstrFilter = exe ? L"Programs (*.exe)\0*.exe\0\0" : L"FFKeyLock profiles (*.ini)\0*.ini\0\0";
+    dialog.lpstrDefExt = exe ? L"exe" : L"ini";
+    dialog.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    if (save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog)) return path;
+    return L"";
+}
+
+void RefreshTheme()
+{
+    ThemeManager::Initialize(GetDpiForWindow(g_hWnd)); ThemeManager::ApplyDarkTitleBar(g_hWnd);
+    g_view.Refresh(true); BuildMenus(); InvalidateRect(g_hWnd,nullptr,TRUE);
+}
+void Quit()
+{
+    if (!g_view.ConfirmDiscard()) return;
+    g_quitting = true; DestroyWindow(g_hWnd);
+}
+void AddPath(const std::wstring& path)
+{
+    if (path.empty()) return;
+    AddGameExeName(path); DetectForegroundGame(); g_view.Refresh();
+    const std::wstring identity = ToLower(std::filesystem::path(path).lexically_normal().wstring());
+    if (g_gameProfiles.contains(identity)) g_view.Select(identity);
+}
+
+void Command(UINT id)
+{
+    bool save = false;
+    switch (id)
+    {
+    case IDM_SHOW_WINDOW: case IDM_SHOW_SETTINGS: ShowMainWindow(); return;
+    case IDM_EXIT: Quit(); return;
+    case IDM_PAUSE_30: PauseProtection(30000); return;
+    case IDM_PAUSE_300: PauseProtection(300000); return;
+    case IDM_PAUSE_MANUAL: PauseProtection(); return;
+    case IDM_RESUME: ResumeProtection(); return;
+    case IDM_PROTECTION: g_protectionEnabled = !g_protectionEnabled; save = true; break;
+    case IDM_AUTO_DETECT: g_autoDetectEnabled = !g_autoDetectEnabled; save = true; break;
+    case IDM_WINDOWS_KEY_GUARD: ToggleWindowsKeyGuard(); BuildMenus(); return;
+    case IDM_WINKEY_SCOPE_PROTECTED: g_windowsKeyGuardScope = WindowsKeyGuardScope::ProtectedForeground; save = true; break;
+    case IDM_WINKEY_SCOPE_ALWAYS: g_windowsKeyGuardScope = WindowsKeyGuardScope::Always; save = true; break;
+    case IDM_STARTUP: SetStartupEnabled(!IsStartupEnabled()); BuildMenus(); return;
+    case IDM_SWITCH_ENGLISH: SwitchToEnglish(GetCommandTargetWindow()); UpdateMainWindow(); return;
+    case IDM_SWITCH_CHINESE: SwitchToChinese(GetCommandTargetWindow()); UpdateMainWindow(); return;
+    case IDM_COPY_GAME_NAME: ProtectedProgramCommands::CopyNameToClipboard(g_hWnd, GameDisplayName(g_view.SelectedName())); return;
+    case IDM_RETRY_HOOK: DisableWindowsKeyGuard(); ApplyWindowsKeyGuard(); UpdateMainWindow(); return;
+    case IDM_ADD_GAME_FILE: if (g_view.ConfirmDiscard()) AddPath(ChooseFile(false,true)); return;
+    case IDM_RUNNING_PROGRAMS: if (g_view.ConfirmDiscard()) AddPath(UI::ChooseRunningProgram(g_hWnd)); return;
+    case IDM_ADD_CURRENT_GAME: if (g_view.ConfirmDiscard()) AddPath(GetProgramPath(GetCommandTargetWindow())); return;
+    case IDM_COPY_PROFILE: g_view.CopyProfile(); return;
+    case IDM_PASTE_PROFILE: g_view.PasteProfile(); return;
+    case IDM_OPEN_GAME_FOLDER:
+    {
+        const auto name = g_view.SelectedName(); const auto it = g_gameExePaths.find(name);
+        ProtectedProgramCommands::OpenProgramFolder(g_hWnd,name,it == g_gameExePaths.end() ? L"" : it->second); return;
+    }
+    case IDM_DELETE_SELECTED_GAME:
+    {
+        if (!g_view.ConfirmDiscard()) return;
+        const auto name = g_view.SelectedName(); if (name.empty()) return;
+        if (name == g_activeGameExeName) LeaveGameProtection();
+        g_gameExeNames.erase(std::remove(g_gameExeNames.begin(),g_gameExeNames.end(),name),g_gameExeNames.end());
+        g_gameExePaths.erase(name); g_gameProfiles.erase(name); save = true; break;
+    }
+    case IDM_EXPORT_PROFILES: case IDM_IMPORT_PROFILES:
+    {
+        if (!g_view.ConfirmDiscard()) return;
+        const auto path = ChooseFile(id == IDM_EXPORT_PROFILES,false); if (path.empty()) return;
+        if (id == IDM_IMPORT_PROFILES && MessageBoxW(g_hWnd,Text(L"导入会合并游戏库，并替换身份相同的游戏配置。是否继续？",L"Import merges games and replaces profiles with the same identity. Continue?"),L"FFKeyLock",MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+        StopKeyboardTest(); LeaveGameProtection();
+        const bool ok = id == IDM_EXPORT_PROFILES ? ExportProfiles(path) : ImportProfiles(path);
+        MessageBoxW(g_hWnd,ok ? Text(L"配置库操作完成。",L"Profile library operation completed.") : Text(L"操作失败。请检查文件格式、版本和目录权限；现有配置库未被替换。",L"Operation failed. Check file format, version and permissions. The existing library was not replaced."),L"FFKeyLock",MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONWARNING));
+        g_view.Refresh(); g_view.Select(g_view.SelectedName()); DetectForegroundGame(); return;
+    }
+    case IDM_EMERGENCY_BACK: case IDM_EMERGENCY_END: case IDM_EMERGENCY_HOME:
+    {
+        if (!g_view.ConfirmDiscard()) return;
+        const UINT key = id == IDM_EMERGENCY_BACK ? VK_BACK : id == IDM_EMERGENCY_END ? VK_END : VK_HOME;
+        for (const auto& [name,profile] : g_gameProfiles)
+            if (std::find(profile.blockedKeys.begin(),profile.blockedKeys.end(),key) != profile.blockedKeys.end())
+            { MessageBoxW(g_hWnd,Text(L"这个按键已被某个游戏锁定，请先在该游戏配置中放行。",L"A game blocks this key. Allow it in that profile first."),L"FFKeyLock",MB_OK | MB_ICONWARNING); return; }
+        g_emergencyKey = key; g_view.Select(g_view.SelectedName()); save = true; break;
+    }
+    case IDM_NOTIFICATIONS: g_notificationsEnabled = !g_notificationsEnabled; save = true; break;
+    case IDM_OVERLAY_NOTIFICATIONS: g_overlayNotificationsEnabled = !g_overlayNotificationsEnabled; save = true; break;
+    case IDM_MUTE_NOTIFICATIONS: g_notificationsEnabled = false; g_overlayNotificationsEnabled = false; save = true; break;
+    case IDM_TEST_NOTIFICATION: ShowTrayNotification(L"FFKeyLock",Text(L"游戏保护通知测试",L"Game protection notification test"),true); return;
+    case IDM_THEME_SYSTEM: case IDM_THEME_LIGHT: case IDM_THEME_DARK:
+        g_themePreference = id == IDM_THEME_SYSTEM ? ThemePreference::System : id == IDM_THEME_LIGHT ? ThemePreference::Light : ThemePreference::Dark;
+        SaveConfig(); RefreshTheme(); return;
+    case IDM_LANGUAGE_CHINESE: case IDM_LANGUAGE_ENGLISH:
+        g_language = id == IDM_LANGUAGE_CHINESE ? UiLanguage::Chinese : UiLanguage::English;
+        SaveConfig(); RefreshTheme(); return;
+    case IDM_OPEN_CONFIG_DIR: ShellExecuteW(g_hWnd,L"open",std::filesystem::path(g_configPath).parent_path().c_str(),nullptr,nullptr,SW_SHOWNORMAL); return;
+    case IDM_OPEN_LOG_DIR: ShellExecuteW(g_hWnd,L"open",GetLogDirectory().c_str(),nullptr,nullptr,SW_SHOWNORMAL); return;
+    case IDM_RESET_CONFIG:
+        if (MessageBoxW(g_hWnd,Text(L"重置并清空游戏配置库？",L"Reset settings and clear all game profiles?"),L"FFKeyLock",MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
+        LeaveGameProtection(); g_gameExeNames.clear(); g_gameExePaths.clear(); g_gameProfiles.clear();
+        g_protectionEnabled = true; g_autoDetectEnabled = true; g_windowsKeyGuardEnabled = false;
+        g_windowsKeyGuardScope = WindowsKeyGuardScope::ProtectedForeground; g_notificationsEnabled = true; g_overlayNotificationsEnabled = true;
+        g_emergencyKey = VK_BACK; g_protectionPaused = false; g_pauseUntil = 0; KillTimer(g_hWnd,TIMER_PAUSE); save = true; break;
+    case IDM_CLEAR_LOCAL_DATA:
+        if (MessageBoxW(g_hWnd,g_portableMode ? Text(L"删除当前便携配置文件并退出？备份文件会保留。", L"Delete the current portable configuration and exit? Backup files are kept.") : Text(L"删除配置、日志、开机启动项及通知快捷方式，然后退出？",L"Delete configuration, logs, startup entry and notification shortcut, then exit?"),L"FFKeyLock",MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
+        LeaveGameProtection(); DisableWindowsKeyGuard();
+        if (!ClearLocalDataAndRegistry()) MessageBoxW(g_hWnd,Text(L"部分文件无法删除，请退出后检查。",L"Some files could not be deleted. Check after exit."),L"FFKeyLock",MB_OK | MB_ICONWARNING);
+        g_quitting = true; DestroyWindow(g_hWnd); return;
+    case IDM_HELP_USAGE:
+        MessageBoxW(g_hWnd,Text(L"1. 选择游戏文件或运行中的游戏窗口。\n2. 点击防误触预设，放行游戏需要的键并保存。\n3. 返回游戏自动应用，切到桌面自动解除。\n\n锁键和输入法可以分别开关。聊天不会解除锁键。\n紧急解除快捷键可在设置中选择，或使用托盘暂停。\n测试配置仅影响本软件窗口；具体游戏请实测。",L"1. Choose the game's executable or running window.\n2. Apply the accidental press preset, allow required keys, and save.\n3. Return to the game to apply; switch away to release.\n\nKey blocking and input language work independently. Chat does not release blocked keys.\nChoose an emergency shortcut in Settings, or pause from the tray.\nThe key test affects only this window; verify behavior in your game."),L"FFKeyLock",MB_OK); return;
+    case IDM_CHECK_UPDATES: ShellExecuteW(g_hWnd,L"open",L"https://github.com/brealinxx/FFKeyLock/releases/latest",nullptr,nullptr,SW_SHOWNORMAL); return;
+    case IDM_ABOUT:
+        MessageBoxW(g_hWnd,(std::wstring(L"FFKeyLock ") + FFKEYLOCK_VERSION_TEXT_W + Text(L"\n原生 Win32 游戏防误触助手\nAssembly by brealin",L"\nNative Win32 game key protection\nAssembly by brealin")).c_str(),L"FFKeyLock",MB_OK); return;
+    }
+    if (save) SaveConfig();
+    DetectForegroundGame(); RefreshKeyboardPolicy(); UpdateMainWindow(); BuildMenus();
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM w, LPARAM l)
+{
+    if (message == g_taskbarCreatedMessage && g_taskbarCreatedMessage) { AddTrayIcon(); return 0; }
     switch (message)
     {
     case WM_CREATE:
-    {
-        CreateWindowExW(0, L"STATIC", Text(L"受保护程序", L"Protected programs"), WS_CHILD | WS_VISIBLE | SS_LEFT, 16, 14, 180, 24,
-            hwnd, nullptr, g_hInst, nullptr);
-        g_protectedBrowserList = CreateWindowExW(
-            WS_EX_CLIENTEDGE,
-            L"LISTBOX",
-            nullptr,
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_VSCROLL | LBS_NOTIFY,
-            16,
-            48,
-            560,
-            260,
-            hwnd,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROTECTED_BROWSER_LIST)),
-            g_hInst,
-            nullptr);
-        HWND copyButton = CreateWindowExW(0, L"BUTTON", Text(L"复制名称", L"Copy name"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-            316, 14, 120, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROTECTED_BROWSER_COPY)), g_hInst, nullptr);
-        HWND openButton = CreateWindowExW(0, L"BUTTON", Text(L"打开文件夹", L"Open folder"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-            456, 14, 120, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROTECTED_BROWSER_OPEN)), g_hInst, nullptr);
-
-        SetDefaultFont(g_protectedBrowserList);
-        SetDefaultFont(copyButton);
-        SetDefaultFont(openButton);
-        RefreshProtectedBrowserList();
-        ThemeManager::ApplyTheme(hwnd);
+        g_hWnd = hwnd; ThemeManager::Initialize(GetDpiForWindow(hwnd)); ThemeManager::ApplyDarkTitleBar(hwnd);
+        g_menuBar.Create(hwnd); g_view.Create(hwnd); AddTrayIcon(); ApplyWindowsKeyGuard(); BuildMenus();
+        SetTimer(hwnd,TIMER_GAME_DETECT,InitializeForegroundDetection() ? DETECT_FALLBACK_INTERVAL_MS : DETECT_RECOVERY_INTERVAL_MS,nullptr);
+        DetectForegroundGame(); return 0;
+    case WM_GAME_CHAT_KEY:
+        if (static_cast<UINT>(l >> 1) == g_gameSession) HandleGameChatKey(static_cast<UINT>(w),(l & 1) != 0);
         return 0;
-    }
-
-    case WM_ERASEBKGND:
-    {
-        RECT client{};
-        GetClientRect(hwnd, &client);
-        FillRect(reinterpret_cast<HDC>(wParam), &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-        return TRUE;
-    }
-
-    case WM_PAINT:
-        PaintWindowBackground(hwnd);
-        return 0;
-
-    case WM_DPICHANGED:
-    {
-        ThemeManager::SetDpi(HIWORD(wParam));
-        ApplyFonts();
-        const auto* suggestedRect = reinterpret_cast<RECT*>(lParam);
-        if (suggestedRect)
-        {
-            SetWindowPos(hwnd, nullptr, suggestedRect->left, suggestedRect->top,
-                suggestedRect->right - suggestedRect->left,
-                suggestedRect->bottom - suggestedRect->top,
-                SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        ThemeManager::ApplyTheme(hwnd);
-        InvalidateWindowAndChildren(hwnd);
-        return 0;
-    }
-
-    case WM_SIZE:
-        InvalidateWindow(hwnd);
-        return 0;
-
-    case WM_CTLCOLORSTATIC:
-    {
-        HDC hdc = reinterpret_cast<HDC>(wParam);
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, ThemeManager::TextColor());
-        return reinterpret_cast<LRESULT>(ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : GetStockObject(WHITE_BRUSH));
-    }
-
-    case WM_CTLCOLORLISTBOX:
-    case WM_CTLCOLOREDIT:
-    case WM_CTLCOLORBTN:
-        return reinterpret_cast<LRESULT>(ThemeManager::HandleCtlColor(hwnd, reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam)));
-
-    case WM_DRAWITEM:
-    {
-        const auto* drawItem = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (drawItem && drawItem->CtlType == ODT_BUTTON)
-        {
-            ThemeManager::DrawButton(*drawItem);
-            return TRUE;
-        }
-        break;
-    }
-
-    case WM_COMMAND:
-        switch (LOWORD(wParam))
-        {
-        case IDC_PROTECTED_BROWSER_COPY:
-            CopyTextToClipboard(GetSelectedBrowserGameName());
-            return 0;
-
-        case IDC_PROTECTED_BROWSER_OPEN:
-            OpenGameFolder(GetSelectedBrowserGameName());
-            return 0;
-        }
-        break;
-
-    case WM_CLOSE:
-        DestroyWindow(hwnd);
-        return 0;
-
-    case WM_DESTROY:
-        if (g_protectedBrowserWindow == hwnd)
-        {
-            g_protectedBrowserWindow = nullptr;
-            g_protectedBrowserList = nullptr;
-        }
-        return 0;
-    }
-
-    return DefWindowProcW(hwnd, message, wParam, lParam);
-}
-
-void EnsureProtectedBrowserClass()
-{
-    static bool registered = false;
-    if (registered)
-    {
-        return;
-    }
-
-    WNDCLASSEXW wcex{};
-    wcex.cbSize = sizeof(wcex);
-    wcex.lpfnWndProc = ProtectedBrowserProc;
-    wcex.hInstance = g_hInst;
-    wcex.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = kProtectedBrowserClass;
-    registered = RegisterClassExW(&wcex) != 0;
-}
-
-void ShowProtectedProgramsBrowser()
-{
-    EnsureProtectedBrowserClass();
-    if (g_protectedBrowserWindow)
-    {
-        RefreshProtectedBrowserList();
-        ShowWindow(g_protectedBrowserWindow, SW_SHOWNORMAL);
-        SetForegroundWindow(g_protectedBrowserWindow);
-        return;
-    }
-
-    g_protectedBrowserWindow = CreateWindowExW(
-        WS_EX_TOOLWINDOW,
-        kProtectedBrowserClass,
-        Text(L"浏览受保护程序", L"Browse protected programs"),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        610,
-        370,
-        g_hWnd,
-        nullptr,
-        g_hInst,
-        nullptr);
-
-    if (g_protectedBrowserWindow)
-    {
-        ShowWindow(g_protectedBrowserWindow, SW_SHOWNORMAL);
-        SetForegroundWindow(g_protectedBrowserWindow);
-    }
-}
-
-void ShowProtectedListHelp()
-{
-    MessageBoxW(g_hWnd,
-        Text(
-            L"受保护的程序列表用于保存需要 FFKeyLock 接管输入法保护的程序。\n\n当自动检测开启，前台窗口属于列表中的 exe 时，FFKeyLock 会切换到英文输入法；离开后会恢复之前的输入法状态。",
-            L"The protected program list stores executables that FFKeyLock should guard.\n\nWhen auto detection is enabled and the foreground window belongs to one of these executables, FFKeyLock switches input to English and restores the previous input state after you leave it."),
-        Text(L"受保护的程序列表", L"Protected program list"),
-        MB_OK | MB_ICONINFORMATION);
-}
-
-void ShowGameListContextMenu(LPARAM lParam)
-{
-    if (lParam != -1)
-    {
-        return;
-    }
-
-    const int scrollY = ContentPanel::ScrollY(g_contentPanel);
-    EnsureContentLayoutForHitTest(scrollY);
-    g_protectedProgramListView.OnRightUp(g_contentPanel, POINT{ -1, -1 }, scrollY);
-}
-void PaintMainWindow(HWND hWnd)
-{
-    PAINTSTRUCT paint{};
-    HDC hdc = BeginPaint(hWnd, &paint);
-    RECT client{};
-    GetClientRect(hWnd, &client);
-    GdiUtils::BufferedPaint buffer(hdc, client);
-    HDC drawDc = buffer.Dc();
-    FillRect(drawDc, &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-
-    buffer.Present();
-    EndPaint(hWnd, &paint);
-}
-
-LRESULT EraseMainWindowBackground(HWND hWnd, HDC hdc)
-{
-    RECT client{};
-    GetClientRect(hWnd, &client);
-    FillRect(hdc, &client, ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-    return TRUE;
-}
-
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == g_taskbarCreatedMessage)
-    {
-        AddTrayIcon();
-        return 0;
-    }
-
-    if (message == WM_GAME_CHAT_KEY)
-    {
-        HandleGameChatKey(static_cast<UINT>(wParam), lParam != 0);
-        return 0;
-    }
-
-    if (message == WM_FOREGROUND_CHANGED)
-    {
-        DetectForegroundGame();
-        return 0;
-    }
-
-    switch (message)
-    {
-    case WM_CREATE:
-        g_hWnd = hWnd;
-        SetWindowLongPtrW(hWnd, GWL_STYLE, (GetWindowLongPtrW(hWnd, GWL_STYLE) & ~WS_VSCROLL) | WS_CLIPCHILDREN);
-        ThemeManager::Initialize(GetDpiForWindow(hWnd));
-        ThemeManager::ApplyDarkTitleBar(hWnd);
-        g_protectedProgramListView.SetItems(&g_gameExeNames, &g_gameExePaths);
-        CreateMenuBar(hWnd);
-        g_contentPanel = ContentPanel::Create(hWnd, g_hInst);
-        ContentPanel::SetLayoutCallback(g_contentPanel, LayoutContentControls);
-        ContentPanel::SetPaintCallback(g_contentPanel, PaintContentPanel);
-        ContentPanel::SetEnsureLayoutCallback(g_contentPanel, EnsureContentPanelLayoutForHitTest);
-        ContentPanel::SetButtonHitTestCallback(g_contentPanel, HitTestContentPanelButton);
-        ContentPanel::SetButtonStateCallback(g_contentPanel, SetContentButtonState);
-        ContentPanel::SetButtonNavigateCallback(g_contentPanel, NavigateContentPanelButton);
-        ContentPanel::SetButtonAccessibleTextCallback(g_contentPanel, ContentPanelButtonAccessibleText);
-        ContentPanel::SetMouseDownCallback(g_contentPanel, ContentPanelMouseDown);
-        ContentPanel::SetMouseClickCallback(g_contentPanel, ContentPanelClicked);
-        ContentPanel::SetRightClickCallback(g_contentPanel, ContentPanelRightClicked);
-        ContentPanel::SetMouseWheelCallback(g_contentPanel, ContentPanelWheel);
-        AddTrayIcon();
-        CreateMainControls();
-        {
-            RECT client{};
-            GetClientRect(hWnd, &client);
-            ResizeMainControls(client.right - client.left, client.bottom - client.top);
-        }
-        ContentPanel::Relayout(g_contentPanel);
-        ThemeManager::ApplyTheme(hWnd);
-        {
-            const bool eventDrivenDetection = InitializeForegroundDetection();
-            SetTimer(hWnd, TIMER_GAME_DETECT,
-                eventDrivenDetection ? DETECT_FALLBACK_INTERVAL_MS : DETECT_RECOVERY_INTERVAL_MS,
-                nullptr);
-            DetectForegroundGame();
-        }
-        return 0;
-
+    case WM_EMERGENCY_UNLOCK: StopKeyboardTest(); PauseProtection(); return 0;
+    case WM_FOREGROUND_CHANGED:
+        if (GetForegroundWindow() != hwnd) StopKeyboardTest();
+        DetectForegroundGame(); return 0;
     case WM_TIMER:
-        if (wParam == TIMER_GAME_DETECT)
-        {
-            DetectForegroundGame();
-        }
-        else if (wParam == TIMER_CHAT_TIMEOUT)
-        {
-            ResumeGameProtectionAfterChatTimeout();
-        }
+        if (w == TIMER_GAME_DETECT) DetectForegroundGame();
+        else if (w == TIMER_CHAT_TIMEOUT) ResumeGameProtectionAfterChatTimeout();
+        else if (w == TIMER_PAUSE && g_pauseUntil && GetTickCount64() >= g_pauseUntil) ResumeProtection();
         return 0;
-
     case WM_SIZE:
-        ResizeMainControls(LOWORD(lParam), HIWORD(lParam));
-        InvalidateRect(hWnd, nullptr, TRUE);
+        { const int bar = MulDiv(36, GetDpiForWindow(hwnd), 96);
+          if (g_menuBar.Window()) SetWindowPos(g_menuBar.Window(),nullptr,0,0,LOWORD(l),bar,SWP_NOACTIVATE | SWP_NOZORDER);
+          if (g_view.Window()) SetWindowPos(g_view.Window(),nullptr,0,bar,LOWORD(l),std::max(0,static_cast<int>(HIWORD(l))-bar),SWP_NOACTIVATE | SWP_NOZORDER); }
         return 0;
-
-    case WM_SHOWWINDOW:
-        if (wParam && g_contentPanel)
-        {
-            RECT client{};
-            GetClientRect(hWnd, &client);
-            ResizeMainControls(client.right - client.left, client.bottom - client.top);
-            ContentPanel::Relayout(g_contentPanel);
-            InvalidateRect(g_contentPanel, nullptr, TRUE);
-        }
-        return 0;
-
-    case WM_MOUSEWHEEL:
-        if (g_contentPanel)
-        {
-            SendMessageW(g_contentPanel, message, wParam, lParam);
-        }
-        return 0;
-
+    case WM_SHOWWINDOW: if (w && g_dirtyView) { g_dirtyView = false; g_view.Refresh(); } return 0;
     case WM_DPICHANGED:
     {
-        ThemeManager::SetDpi(HIWORD(wParam));
-        ThemeManager::ApplyTheme(hWnd);
-        ApplyFonts();
-
-        const auto* suggestedRect = reinterpret_cast<RECT*>(lParam);
-        if (suggestedRect)
-        {
-            SetWindowPos(hWnd, nullptr, suggestedRect->left, suggestedRect->top,
-                suggestedRect->right - suggestedRect->left,
-                suggestedRect->bottom - suggestedRect->top,
-                SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-
-        RECT client{};
-        GetClientRect(hWnd, &client);
-        ResizeMainControls(client.right - client.left, client.bottom - client.top);
-
-        g_scrollY = 0;
-        ContentPanel::SetScrollY(g_contentPanel, 0);
-        ContentPanel::Relayout(g_contentPanel);
-        InvalidateRect(g_contentPanel, nullptr, TRUE);
-
-        RedrawWindow(
-            hWnd,
-            nullptr,
-            nullptr,
-            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-        return 0;
+        const auto* r = reinterpret_cast<RECT*>(l); SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER | SWP_NOACTIVATE);
+        RefreshTheme(); return 0;
     }
-
-    case WM_DISPLAYCHANGE:
-    {
-        ThemeManager::SetDpi(GetDpiForWindow(hWnd));
-        ApplyFonts();
-        RECT client{};
-        GetClientRect(hWnd, &client);
-        ResizeMainControls(client.right - client.left, client.bottom - client.top);
-        InvalidateWindowAndChildren(hWnd);
-        return 0;
-    }
-
-    case WM_MOVE:
-        InvalidateWindow(hWnd);
-        return 0;
-
-    case WM_ERASEBKGND:
-        return EraseMainWindowBackground(hWnd, reinterpret_cast<HDC>(wParam));
-
-    case WM_PAINT:
-        PaintMainWindow(hWnd);
-        return 0;
-
-    case WM_CTLCOLORSTATIC:
-    {
-        HDC hdc = reinterpret_cast<HDC>(wParam);
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, ThemeManager::TextColor());
-        return reinterpret_cast<LRESULT>(ThemeManager::WindowBrush() ? ThemeManager::WindowBrush() : GetStockObject(WHITE_BRUSH));
-    }
-
-    case WM_CTLCOLOREDIT:
-    case WM_CTLCOLORLISTBOX:
-    case WM_CTLCOLORBTN:
-    {
-        return reinterpret_cast<LRESULT>(ThemeManager::HandleCtlColor(hWnd, reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam)));
-    }
-
-    case WM_SETTINGCHANGE:
-        ThemeManager::HandleSettingChange(hWnd);
-        break;
-
-    case WM_MEASUREITEM:
-    {
-        auto* measureItem = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
-        if (measureItem && measureItem->CtlType == ODT_MENU)
-        {
-            ThemeManager::MeasureMenuItem(*measureItem);
-            return TRUE;
-        }
-        break;
-    }
-
-    case WM_DRAWITEM:
-    {
-        const auto* drawItem = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (drawItem && drawItem->CtlType == ODT_MENU)
-        {
-            ThemeManager::DrawMenuItem(*drawItem);
-            return TRUE;
-        }
-        return FALSE;
-    }
-
-    case WM_CONTEXTMENU:
-        if (reinterpret_cast<HWND>(wParam) == g_contentPanel && lParam == -1)
-        {
-            ShowGameListContextMenu(lParam);
-            return 0;
-        }
-        break;
-
+    case WM_SETTINGCHANGE: case WM_THEMECHANGED: RefreshTheme(); return 0;
     case WM_GETMINMAXINFO:
     {
-        auto* minMaxInfo = reinterpret_cast<MINMAXINFO*>(lParam);
-        minMaxInfo->ptMinTrackSize.x = Scale(760);
-        minMaxInfo->ptMinTrackSize.y = Scale(520);
-        return 0;
+        auto* info = reinterpret_cast<MINMAXINFO*>(l); const UINT dpi = GetDpiForWindow(hwnd);
+        info->ptMinTrackSize = {MulDiv(850,dpi,96),MulDiv(600,dpi,96)}; return 0;
     }
-
+    case WM_COMMAND: Command(LOWORD(w)); return 0;
     case WM_TRAYICON:
-        if (LOWORD(lParam) == WM_CONTEXTMENU || LOWORD(lParam) == WM_RBUTTONUP)
-        {
-            ShowTrayMenu();
-        }
-        else if (LOWORD(lParam) == WM_LBUTTONDBLCLK)
-        {
-            ShowMainWindow();
-        }
+        if (LOWORD(l) == WM_CONTEXTMENU || LOWORD(l) == WM_RBUTTONUP) ShowTrayMenu();
+        else if (LOWORD(l) == WM_LBUTTONDBLCLK || LOWORD(l) == NIN_SELECT || LOWORD(l) == NIN_KEYSELECT) ShowMainWindow();
         return 0;
-
-    case WM_COMMAND:
-        switch (LOWORD(wParam))
-        {
-        case IDM_OPEN_CONFIG_DIR:
-            OpenConfigDirectory();
-            return 0;
-
-        case IDM_OPEN_LOG_DIR:
-            OpenLogDirectory();
-            return 0;
-
-        case IDM_RESET_CONFIG:
-            if (MessageBoxW(hWnd,
-                Text(L"确定要重置 FFKeyLock 配置吗？", L"Reset FFKeyLock configuration?"),
-                Text(L"重置配置", L"Reset config"),
-                MB_YESNO | MB_ICONWARNING) == IDYES)
-            {
-                g_protectionEnabled = true;
-                g_autoDetectEnabled = true;
-                g_windowsKeyGuardEnabled = false;
-                g_windowsKeyGuardScope = WindowsKeyGuardScope::ProtectedForeground;
-                g_notificationsEnabled = true;
-                g_overlayNotificationsEnabled = true;
-                g_gameExeNames.clear();
-                g_gameExePaths.clear();
-                g_gameProfiles.clear();
-                LeaveGameProtection();
-                SaveConfig();
-                UpdateMainWindow();
-            }
-            return 0;
-
-        case IDM_CLEAR_LOCAL_DATA:
-            if (MessageBoxW(hWnd,
-                Text(L"确定要删除 FFKeyLock 的本地配置、日志、开机启动项和通知快捷方式吗？\n\n操作完成后程序将退出。", L"Delete FFKeyLock local configuration, logs, startup entry, and notification shortcut?\n\nThe app will exit after cleanup."),
-                Text(L"删除本地数据及注册表", L"Delete local data and registry"),
-                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES)
-            {
-                Log(LogLevel::Warning, L"User confirmed local data and registry cleanup.");
-                LeaveGameProtection();
-                DisableWindowsKeyGuard();
-                RemoveTrayIcon();
-                const bool cleaned = ClearLocalDataAndRegistry();
-                MessageBoxW(hWnd,
-                    cleaned
-                        ? Text(L"本地数据及注册表项已删除。", L"Local data and registry entries have been deleted.")
-                        : Text(L"清理已执行，但部分文件可能仍被占用。请退出后手动检查。", L"Cleanup ran, but some files may still be in use. Please check manually after exit."),
-                    L"FFKeyLock",
-                    cleaned ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
-                QuitApplication();
-            }
-            return 0;
-
-        case IDM_TEST_NOTIFICATION:
-            ShowTrayNotification(L"FFKeyLock", Text(L"这是一条测试通知。", L"This is a test notification."), true);
-            return 0;
-
-        case IDM_MUTE_NOTIFICATIONS:
-            g_notificationsEnabled = false;
-            g_overlayNotificationsEnabled = false;
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_HELP_USAGE:
-            MessageBoxW(hWnd,
-                Text(L"启用保护模式和自动检测后，当前前台窗口属于受保护程序列表时，FFKeyLock 会切换并锁定英文输入法。", L"When protection and auto detect are enabled, FFKeyLock switches protected foreground programs to English input."),
-                Text(L"使用说明", L"Usage"),
-                MB_OK | MB_ICONINFORMATION);
-            return 0;
-
-        case IDM_CHECK_UPDATES:
-            OpenLatestReleasePage(hWnd);
-            return 0;
-
-        case IDM_GITHUB_PROJECT:
-            OpenExternalUrl(hWnd, kGitHubProjectUrl);
-            return 0;
-
-        case IDM_SHOW_SETTINGS:
-            ShowMainWindow();
-            return 0;
-
-        case IDM_SHOW_WINDOW:
-            ShowMainWindow();
-            return 0;
-
-        case IDM_PROTECTION:
-        case IDC_PROTECTION_BUTTON:
-            g_protectionEnabled = !g_protectionEnabled;
-            if (!g_protectionEnabled)
-            {
-                LeaveGameProtection();
-            }
-            ApplyWindowsKeyGuard();
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_AUTO_DETECT:
-        case IDC_AUTO_DETECT_BUTTON:
-            g_autoDetectEnabled = !g_autoDetectEnabled;
-            if (!g_autoDetectEnabled)
-            {
-                LeaveGameProtection();
-            }
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_SWITCH_ENGLISH:
-        case IDC_SWITCH_EN_BUTTON:
-            SwitchToEnglish(GetCommandTargetWindow());
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_SWITCH_CHINESE:
-        case IDC_SWITCH_CN_BUTTON:
-            SwitchToChinese(GetCommandTargetWindow());
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_ADD_CURRENT_GAME:
-            if (!g_trayAddCurrentRequested)
-            {
-                return 0;
-            }
-            AddProgramAsGame(GetCommandTargetWindow());
-            UpdateMainWindow();
-            return 0;
-
-        case IDC_ADD_GAME_BUTTON:
-            if (reinterpret_cast<HWND>(lParam) != g_contentPanel)
-            {
-                return 0;
-            }
-            AddProgramAsGame(GetCommandTargetWindow());
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_ADD_GAME_FILE:
-        case IDC_ADD_FILE_BUTTON:
-            AddGameFromFileDialog();
-            return 0;
-
-        case IDM_DELETE_SELECTED_GAME:
-        case IDC_DELETE_GAME_BUTTON:
-            DeleteSelectedGame();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_EDIT_GAME_PROFILE:
-        case IDC_EDIT_GAME_PROFILE_BUTTON:
-            EditSelectedGameProfile();
-            return 0;
-
-        case IDM_COPY_GAME_NAME:
-            CopyTextToClipboard(GetSelectedGameName());
-            return 0;
-
-        case IDM_OPEN_GAME_FOLDER:
-            OpenSelectedGameFolder();
-            return 0;
-
-        case IDM_GAME_LIST_HELP:
-        case IDC_GAME_LIST_HELP:
-            ShowProtectedListHelp();
-            return 0;
-
-        case IDM_BROWSE_PROTECTED:
-        case IDC_BROWSE_PROTECTED_BUTTON:
-            ShowProtectedProgramsBrowser();
-            return 0;
-
-        case IDM_STARTUP:
-        case IDC_STARTUP_BUTTON:
-            SetStartupEnabled(!IsStartupEnabled());
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_NOTIFICATIONS:
-            g_notificationsEnabled = !g_notificationsEnabled;
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_OVERLAY_NOTIFICATIONS:
-            g_overlayNotificationsEnabled = !g_overlayNotificationsEnabled;
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_WINDOWS_KEY_GUARD:
-        case IDC_WINDOWS_KEY_BUTTON:
-            ToggleWindowsKeyGuard();
-            return 0;
-
-        case IDM_WINKEY_SCOPE_PROTECTED:
-            g_windowsKeyGuardScope = WindowsKeyGuardScope::ProtectedForeground;
-            ApplyWindowsKeyGuard();
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_WINKEY_SCOPE_ALWAYS:
-            g_windowsKeyGuardScope = WindowsKeyGuardScope::Always;
-            ApplyWindowsKeyGuard();
-            SaveConfig();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_LANGUAGE_CHINESE:
-            g_language = UiLanguage::Chinese;
-            SaveConfig();
-            ApplyTheme();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_LANGUAGE_ENGLISH:
-            g_language = UiLanguage::English;
-            SaveConfig();
-            ApplyTheme();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_THEME_LIGHT:
-            g_themePreference = ThemePreference::Light;
-            SaveConfig();
-            ApplyTheme();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_THEME_DARK:
-            g_themePreference = ThemePreference::Dark;
-            SaveConfig();
-            ApplyTheme();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_THEME_SYSTEM:
-            g_themePreference = ThemePreference::System;
-            SaveConfig();
-            ApplyTheme();
-            UpdateMainWindow();
-            return 0;
-
-        case IDM_ABOUT:
-            MessageBoxW(hWnd,
-                (std::wstring(Text(L"FFKeyLock\n\n轻量级 Win32 游戏输入法保护工具。\n\nVersion ", L"FFKeyLock\n\nLightweight Win32 game input-language protection utility.\n\nVersion ")) + FFKEYLOCK_VERSION_TEXT_W + L"\nAssembly by brealin").c_str(),
-                Text(L"关于 FFKeyLock", L"About FFKeyLock"),
-
-                MB_OK | MB_ICONINFORMATION);
-
-            return 0;
-
-        case IDM_EXIT:
-            QuitApplication();
-            return 0;
-        }
-        break;
-
+    case WM_PAINT: case WM_PRINTCLIENT: case WM_ERASEBKGND: return UI::PaintSurface(hwnd, message, w);
+    case WM_DRAWITEM: return UI::PopupMenuTheme::Draw(*reinterpret_cast<DRAWITEMSTRUCT*>(l));
+    case WM_MEASUREITEM: return UI::PopupMenuTheme::Measure(*reinterpret_cast<MEASUREITEMSTRUCT*>(l));
+    case WM_MENUCHAR: return UI::PopupMenuTheme::MenuChar(w, reinterpret_cast<HMENU>(l));
     case WM_CLOSE:
-        if (g_isQuitting)
-        {
-            DestroyWindow(hWnd);
-            return 0;
-        }
-        RoundedMenu::CloseAll();
-        g_menuBarOpenIndex = -1;
-        InvalidateWindow(g_menuBar);
-        ShowWindow(hWnd, SW_HIDE);
-        ShowTrayNotification(L"FFKeyLock", Text(L"窗口已隐藏，程序仍在托盘运行。", L"The window is hidden. FFKeyLock is still running in the tray."));
+        if (g_quitting) DestroyWindow(hwnd);
+        else { StopKeyboardTest(); ShowWindow(hwnd,SW_HIDE); }
         return 0;
-
     case WM_DESTROY:
-        KillTimer(hWnd, TIMER_GAME_DETECT);
-        KillTimer(hWnd, TIMER_CHAT_TIMEOUT);
-        ShutdownForegroundDetection();
-        if (g_protectedBrowserWindow)
-        {
-            DestroyWindow(g_protectedBrowserWindow);
-        }
-        LeaveGameProtection();
-        OverlayNotificationManager::Shutdown();
-        DisableWindowsKeyGuard();
-        RemoveTrayIcon();
-        ThemeManager::Shutdown();
-        PostQuitMessage(0);
-        return 0;
+        g_destroying = true; KillTimer(hwnd,TIMER_GAME_DETECT); KillTimer(hwnd,TIMER_CHAT_TIMEOUT); KillTimer(hwnd,TIMER_PAUSE);
+        ShutdownForegroundDetection(); StopKeyboardTest(); LeaveGameProtection(); DisableWindowsKeyGuard();
+        OverlayNotificationManager::Shutdown(); RemoveTrayIcon(); ThemeManager::Shutdown(); PostQuitMessage(0); return 0;
     }
+    return DefWindowProcW(hwnd,message,w,l);
+}
+}
 
-    return DefWindowProcW(hWnd, message, wParam, lParam);
-}
-}
+bool TranslateMainMessage(MSG& message) { return g_menuBar.Translate(message); }
 
 void UpdateMainWindow()
 {
-    g_startupEnabled = IsStartupEnabled();
-    if (g_hWnd)
-    {
-        SetWindowTextW(g_hWnd, kAppName);
-    }
-    if (g_menuBar)
-    {
-        InvalidateWindow(g_menuBar);
-    }
-    if (g_statusText)
-    {
-        SetWindowTextW(g_statusText, BuildStatusText().c_str());
-    }
-    if (g_protectionButton)
-    {
-        SetWindowTextW(g_protectionButton, g_protectionEnabled ? Text(L"关闭保护模式", L"Disable protection") : Text(L"开启保护模式", L"Enable protection"));
-    }
-    if (g_autoDetectButton)
-    {
-        SetWindowTextW(g_autoDetectButton, g_autoDetectEnabled ? Text(L"关闭自动检测", L"Disable auto detect") : Text(L"开启自动检测", L"Enable auto detect"));
-    }
-    if (g_startupButton)
-    {
-        SetWindowTextW(g_startupButton, g_startupEnabled ? Text(L"关闭开机启动", L"Disable startup") : Text(L"开启开机启动", L"Enable startup"));
-    }
-    if (g_windowsKeyButton)
-    {
-        SetWindowTextW(g_windowsKeyButton, g_windowsKeyGuardEnabled ? Text(L"开启 Win 键", L"Enable Win key") : Text(L"禁用 Win 键", L"Disable Win key"));
-    }
-    if (g_switchEnglishButton)
-    {
-        SetWindowTextW(g_switchEnglishButton, Text(L"切换为英文", L"Switch to English"));
-    }
-    if (g_switchChineseButton)
-    {
-        SetWindowTextW(g_switchChineseButton, Text(L"切换为中文", L"Switch to Chinese"));
-    }
-    if (g_gameListLabel)
-    {
-        SetWindowTextW(g_gameListLabel, Text(L"受保护的程序列表", L"Protected program list"));
-    }
-    if (g_gameListHelpButton)
-    {
-        SetWindowTextW(g_gameListHelpButton, L"?");
-    }
-    if (g_addCurrentButton)
-    {
-        SetWindowTextW(g_addCurrentButton, Text(L"添加受保护程序", L"Add protected"));
-    }
-    if (g_addFileButton)
-    {
-        SetWindowTextW(g_addFileButton, Text(L"浏览添加...", L"Browse add..."));
-    }
-    if (g_deleteGameButton)
-    {
-        SetWindowTextW(g_deleteGameButton, Text(L"删除选中", L"Delete selected"));
-    }
-    if (g_browseProtectedButton)
-    {
-        SetWindowTextW(g_browseProtectedButton, Text(L"浏览列表", L"Browse list"));
-    }
-    if (g_subtitleText)
-    {
-        SetWindowTextW(g_subtitleText, Text(L"游戏防误触助手", L"Game mis-touch protection assistant"));
-    }
-    if (g_statusGroup)
-    {
-        SetWindowTextW(g_statusGroup, Text(L"当前状态", L"Current status"));
-    }
-    if (g_featureGroup)
-    {
-        SetWindowTextW(g_featureGroup, Text(L"功能开关", L"Feature switches"));
-    }
-    if (g_inputGroup)
-    {
-        SetWindowTextW(g_inputGroup, Text(L"输入法", L"Input language"));
-    }
-    if (g_programsGroup)
-    {
-        SetWindowTextW(g_programsGroup, Text(L"受保护程序", L"Protected programs"));
-    }
-    if (g_statusText)
-    {
-        SetWindowTextW(g_statusText, BuildPrimaryStatusText().c_str());
-    }
-    const bool canShowDetectedGame = g_protectionEnabled && g_autoDetectEnabled && !g_currentDetectedGameName.empty();
-    const std::wstring detectedGame = canShowDetectedGame ? g_currentDetectedGameName : Text(L"无", L"None");
-    const std::wstring inputLanguage = CurrentInputLanguageText();
-    if (g_statusDetectedText)
-    {
-        SetWindowTextW(g_statusDetectedText, StatusLine(L"当前检测到：", L"Detected: ", detectedGame).c_str());
-    }
-    if (g_statusInputText)
-    {
-        SetWindowTextW(g_statusInputText, StatusLine(L"输入法状态：", L"Input language: ", inputLanguage).c_str());
-    }
-    if (g_statusWinKeyText)
-    {
-        SetWindowTextW(g_statusWinKeyText, StatusLine(L"Win 键锁定：", L"Win key lock: ", WindowsKeyStatusText()).c_str());
-    }
-    if (g_protectionLabel)
-    {
-        SetWindowTextW(g_protectionLabel, Text(L"保护模式", L"Protection mode"));
-    }
-    if (g_protectionStateText)
-    {
-        SetWindowTextW(g_protectionStateText, EnabledText(g_protectionEnabled).c_str());
-    }
-    if (g_protectionButton)
-    {
-        SetWindowTextW(g_protectionButton, SwitchActionText(g_protectionEnabled).c_str());
-    }
-    if (g_autoDetectLabel)
-    {
-        SetWindowTextW(g_autoDetectLabel, Text(L"自动检测", L"Auto detect"));
-    }
-    if (g_autoDetectStateText)
-    {
-        SetWindowTextW(g_autoDetectStateText, EnabledText(g_autoDetectEnabled).c_str());
-    }
-    if (g_autoDetectButton)
-    {
-        SetWindowTextW(g_autoDetectButton, SwitchActionText(g_autoDetectEnabled).c_str());
-    }
-    const bool startupEnabled = g_startupEnabled;
-    if (g_startupLabel)
-    {
-        SetWindowTextW(g_startupLabel, Text(L"开机启动", L"Startup"));
-    }
-    if (g_startupStateText)
-    {
-        SetWindowTextW(g_startupStateText, EnabledText(startupEnabled).c_str());
-    }
-    if (g_startupButton)
-    {
-        SetWindowTextW(g_startupButton, SwitchActionText(startupEnabled).c_str());
-    }
-    if (g_windowsKeyLabel)
-    {
-        SetWindowTextW(g_windowsKeyLabel, Text(L"Win 键锁定", L"Win key lock"));
-    }
-    if (g_windowsKeyStateText)
-    {
-        SetWindowTextW(g_windowsKeyStateText, EnabledText(g_windowsKeyGuardEnabled).c_str());
-    }
-    if (g_windowsKeyButton)
-    {
-        SetWindowTextW(g_windowsKeyButton, SwitchActionText(g_windowsKeyGuardEnabled).c_str());
-    }
-    if (g_inputLanguageText)
-    {
-        SetWindowTextW(g_inputLanguageText, StatusLine(L"当前输入法：", L"Current input language: ", inputLanguage).c_str());
-    }
-    if (g_switchChineseButton)
-    {
-        SetWindowTextW(g_switchChineseButton, Text(L"切换为中文", L"Switch to Chinese"));
-    }
-    if (g_switchEnglishButton)
-    {
-        SetWindowTextW(g_switchEnglishButton, Text(L"切换为英文", L"Switch to English"));
-    }
-    if (g_gameListLabel)
-    {
-        SetWindowTextW(g_gameListLabel, Text(L"程序列表", L"Program list"));
-    }
-    if (g_addCurrentButton)
-    {
-        SetWindowTextW(g_addCurrentButton, Text(L"添加当前程序", L"Add current program"));
-    }
-    if (g_browseProtectedButton)
-    {
-        SetWindowTextW(g_browseProtectedButton, Text(L"浏览运行中程序", L"Browse running"));
-    }
-    if (g_addFileButton)
-    {
-        SetWindowTextW(g_addFileButton, Text(L"从文件选择", L"Choose file"));
-    }
-    if (g_deleteGameButton)
-    {
-        SetWindowTextW(g_deleteGameButton, Text(L"删除选中", L"Delete selected"));
-    }
-    RefreshGameList();
-    if (g_contentPanel)
-    {
-        ContentPanel::Relayout(g_contentPanel);
-        InvalidateRect(g_contentPanel, nullptr, TRUE);
-    }
-    InvalidateWindowAndChildren(g_hWnd);
+    if (g_destroying) return;
+    RefreshKeyboardPolicy();
+    if (g_hWnd && IsWindowVisible(g_hWnd) && !IsIconic(g_hWnd)) g_view.Refresh();
+    else g_dirtyView = true;
 }
-
 void ShowMainWindow()
 {
-    ShowWindow(g_hWnd, SW_SHOWNORMAL);
-    SetForegroundWindow(g_hWnd);
+    ShowWindow(g_hWnd,SW_RESTORE); SetForegroundWindow(g_hWnd); g_view.Refresh();
 }
-
 void RememberExternalForegroundWindow(HWND hwnd)
 {
-    if (IsAddableExternalWindow(hwnd))
-    {
-        g_lastExternalForegroundWindow = GetAncestor(hwnd, GA_ROOT);
-    }
+    if (External(hwnd)) g_lastExternalForegroundWindow = GetAncestor(hwnd,GA_ROOT);
 }
-
 HWND GetCommandTargetWindow()
 {
-    if (IsAddableExternalWindow(g_menuTargetWindow))
-    {
-        return GetAncestor(g_menuTargetWindow, GA_ROOT);
-    }
-
-    HWND foregroundWindow = GetForegroundWindow();
-    if (IsAddableExternalWindow(foregroundWindow))
-    {
-        return GetAncestor(foregroundWindow, GA_ROOT);
-    }
-
-    if (IsAddableExternalWindow(g_lastExternalForegroundWindow))
-    {
-        return GetAncestor(g_lastExternalForegroundWindow, GA_ROOT);
-    }
-
-    return FindRecentAddableExternalWindow();
+    if (External(g_menuTargetWindow)) return g_menuTargetWindow;
+    if (External(GetForegroundWindow())) return GetForegroundWindow();
+    return External(g_lastExternalForegroundWindow) ? g_lastExternalForegroundWindow : nullptr;
 }
-
 void ShowTrayMenu()
 {
-    const HWND foregroundWindow = GetForegroundWindow();
-    RememberExternalForegroundWindow(foregroundWindow);
-    g_menuTargetWindow = IsAddableExternalWindow(foregroundWindow) ? GetAncestor(foregroundWindow, GA_ROOT) : FindRecentAddableExternalWindow();
-    if (!g_menuTargetWindow)
-    {
-        g_menuTargetWindow = g_lastExternalForegroundWindow;
-    }
-
-    POINT roundedPoint{};
-    GetCursorPos(&roundedPoint);
-    const UINT command = RoundedMenu::Show(g_hWnd, roundedPoint, BuildTrayMenu(), true, false);
-    if (!command)
-    {
-        return;
-    }
-
-    if (command == IDM_EXIT)
-    {
-        QuitApplication();
-        return;
-    }
-
-    if (command == IDM_ADD_CURRENT_GAME)
-    {
-        g_trayAddCurrentRequested = true;
-        SendMessageW(g_hWnd, WM_COMMAND, MAKEWPARAM(command, 0), 0);
-        g_trayAddCurrentRequested = false;
-        return;
-    }
-
-    SendMessageW(g_hWnd, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    RememberExternalForegroundWindow(GetForegroundWindow()); g_menuTargetWindow = GetCommandTargetWindow();
+    HMENU menu = UI::CreateTrayMenu();
+    POINT pt{}; GetCursorPos(&pt); SetForegroundWindow(g_hWnd);
+    const UINT command = UI::ShowPopupMenu(g_hWnd, menu, pt);
+    DestroyMenu(menu); PostMessageW(g_hWnd,WM_NULL,0,0);
+    if (command) Command(command);
+    g_menuTargetWindow = nullptr;
 }
-
-ATOM RegisterMainWindowClass(HINSTANCE hInstance)
+ATOM RegisterMainWindowClass(HINSTANCE instance)
 {
-    WNDCLASSEXW wcex{};
-    wcex.cbSize = sizeof(wcex);
-    wcex.style = 0;
-    wcex.lpfnWndProc = WndProc;
-    wcex.hInstance = hInstance;
-    wcex.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_FFKEYLOCK));
-    wcex.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = kAppName;
-    wcex.hIconSm = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_FFKEYLOCK));
-    return RegisterClassExW(&wcex);
+    WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = WndProc; wc.hInstance = instance;
+    wc.hIcon = LoadIconW(instance,MAKEINTRESOURCEW(IDI_FFKEYLOCK)); wc.hIconSm = wc.hIcon;
+    wc.hCursor = LoadCursorW(nullptr,IDC_ARROW); wc.lpszClassName = kAppName;
+    return RegisterClassExW(&wc);
 }
 }
-
-

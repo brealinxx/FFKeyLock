@@ -47,7 +47,7 @@ void RestoreSavedLayout()
 {
     if (g_savedLayout)
     {
-        RequestInputLanguage(IsWindow(g_savedWindow) ? g_savedWindow : GetForegroundWindow(), g_savedLayout);
+        if (IsWindow(g_savedWindow)) RequestInputLanguage(g_savedWindow, g_savedLayout);
         g_savedLayout = nullptr;
         g_savedWindow = nullptr;
     }

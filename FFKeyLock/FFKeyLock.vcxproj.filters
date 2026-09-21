@@ -27,6 +27,9 @@
     <ClInclude Include="GameProtection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="KeyPolicy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="InputLanguage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -72,32 +75,17 @@
     <ClInclude Include="Platform\GdiUtils.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\Controls\RoundedButton.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="UI\Controls\ContentPanel.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="UI\Controls\ToggleSwitch.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="UI\Menu\RoundedMenu.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Version.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\Main\MainContentView.h">
-      <Filter>Header Files</Filter>
+      <Filter>UI\Main</Filter>
     </ClInclude>
     <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramCommands.h">
-      <Filter>Header Files</Filter>
+      <Filter>UI\ProtectedPrograms</Filter>
     </ClInclude>
-    <ClInclude Include="UI\ProtectedPrograms\GameProfileDialog.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="UI\ProtectedPrograms\ProtectedProgramListView.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="UI\Profiles\ProfileEditor.h">
+      <Filter>UI\Profiles</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -149,29 +137,14 @@
     <ClCompile Include="Platform\GdiUtils.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\Controls\RoundedButton.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="UI\Controls\ContentPanel.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="UI\Controls\ToggleSwitch.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="UI\Menu\RoundedMenu.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="UI\Main\MainContentView.cpp">
-      <Filter>Source Files</Filter>
+      <Filter>UI\Main</Filter>
     </ClCompile>
     <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramCommands.cpp">
-      <Filter>Source Files</Filter>
+      <Filter>UI\ProtectedPrograms</Filter>
     </ClCompile>
-    <ClCompile Include="UI\ProtectedPrograms\GameProfileDialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="UI\ProtectedPrograms\ProtectedProgramListView.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="UI\Profiles\ProfileEditor.cpp">
+      <Filter>UI\Profiles</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -183,5 +156,96 @@
     <Image Include="FFKeyLock.ico">
       <Filter>Resource Files</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="UI"><UniqueIdentifier>{1ea2a9e5-030f-59f1-86f1-7d8cac856b61}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Controls"><UniqueIdentifier>{81eabd6d-2990-5c3a-ae32-607fcbc44896}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Library"><UniqueIdentifier>{615db9a7-8c51-5a2c-b3a3-c03833407726}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Main"><UniqueIdentifier>{59a42f84-409a-5bdd-9057-c13770a2ce53}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Menu"><UniqueIdentifier>{2e2b60d6-5861-5baa-81d1-7bad85d6fdff}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Profiles"><UniqueIdentifier>{b3ec8701-6eea-55ef-9c48-14c23a01e6ac}</UniqueIdentifier></Filter>
+    <Filter Include="UI\ProtectedPrograms"><UniqueIdentifier>{9e4647db-89c0-5325-9547-c8a4d8d55541}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Rendering"><UniqueIdentifier>{1a1e04de-7c0c-50c6-ac60-c77d3425aa29}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Windows"><UniqueIdentifier>{c8438873-a856-5d4c-9ab6-f8aa53cb7b2b}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Controls\ScrollView.h">
+      <Filter>UI\Controls</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Library\GameLibraryView.h">
+      <Filter>UI\Library</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Menu\AppMenus.h">
+      <Filter>UI\Menu</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Menu\MenuBar.h">
+      <Filter>UI\Menu</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Menu\PopupMenu.h">
+      <Filter>UI\Menu</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Rendering\NativeControls.h">
+      <Filter>UI\Rendering</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Rendering\Surface.h">
+      <Filter>UI\Rendering</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\Windows\RunningProgramPicker.h">
+      <Filter>UI\Windows</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Controls\ScrollView.cpp">
+      <Filter>UI\Controls</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Library\GameLibraryView.cpp">
+      <Filter>UI\Library</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Menu\AppMenus.cpp">
+      <Filter>UI\Menu</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Menu\MenuBar.cpp">
+      <Filter>UI\Menu</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Menu\PopupMenu.cpp">
+      <Filter>UI\Menu</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Rendering\NativeControls.cpp">
+      <Filter>UI\Rendering</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Rendering\Surface.cpp">
+      <Filter>UI\Rendering</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\Windows\RunningProgramPicker.cpp">
+      <Filter>UI\Windows</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

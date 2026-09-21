@@ -59,6 +59,16 @@ jobs:
             }
           }
 
+      - name: Regression tests
+        shell: pwsh
+        run: |
+          foreach ($platform in @("x64", "Win32")) {
+            msbuild tests/FFKeyLock.Tests.vcxproj /p:Configuration=Release /p:Platform=$platform /m
+            if ($LASTEXITCODE -ne 0) { throw "Test build failed for $platform." }
+            & "tests/artifacts/$platform/FFKeyLock.Tests.exe" "$PWD/tests/artifacts"
+            if ($LASTEXITCODE -ne 0) { throw "Regression tests failed for $platform." }
+          }
+
       - name: Verify runtime dependencies
         shell: pwsh
         run: |
@@ -188,6 +198,7 @@ jobs:
             Copy-Item $package.Source $packageRoot\
             Copy-Item FFKeyLock\FFKeyLock.ico $packageRoot\
             Copy-Item README.md,README.zh-CN.md,CHANGELOG.md,CHANGELOG-en.md,LICENSE $packageRoot\
+            Copy-Item Assets "$packageRoot\Assets" -Recurse
             Compress-Archive -Path $packageRoot -DestinationPath "dist\FFKeyLock-v$version-$($package.Arch).zip" -Force
           }
 

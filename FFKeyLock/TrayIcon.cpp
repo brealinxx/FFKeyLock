@@ -37,6 +37,11 @@ void ShowTrayNotification(const wchar_t* title, const wchar_t* message)
 
 void ShowTrayNotification(const wchar_t* title, const wchar_t* message, bool prominent)
 {
+    if (prominent && g_overlayNotificationsEnabled)
+    {
+        OverlayNotificationManager::ShowSuccess(title, message);
+        return;
+    }
     if (!g_notificationsEnabled && !(prominent && g_overlayNotificationsEnabled))
     {
         return;
@@ -69,10 +74,6 @@ void ShowTrayNotification(const wchar_t* title, const wchar_t* message, bool pro
         }
     }
 
-    if (prominent && g_overlayNotificationsEnabled)
-    {
-        OverlayNotificationManager::ShowSuccess(title, message);
-    }
 }
 
 void AddTrayIcon()

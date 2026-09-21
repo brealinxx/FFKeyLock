@@ -1,5 +1,5 @@
 #ifndef AppVersion
-#define AppVersion "0.5.0"
+#define AppVersion "0.6.0"
 #endif
 
 #ifndef AppArchitecture
@@ -76,6 +76,7 @@ Source: "{#SourceExePath}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\FFKeyLock\FFKeyLock.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.zh-CN.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\Assets\intro_*.png"; DestDir: "{app}\Assets"; Flags: ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\CHANGELOG-en.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion

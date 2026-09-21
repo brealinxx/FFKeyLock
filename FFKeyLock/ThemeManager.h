@@ -15,14 +15,8 @@ public:
     static void Shutdown();
     static void SetDpi(UINT dpi);
     static int Scale(int value);
-    static void ApplyTheme(HWND root);
     static void ApplyDarkTitleBar(HWND hwnd);
-    static void HandleSettingChange(HWND root);
-    static HBRUSH HandleCtlColor(HWND hwnd, HDC hdc, HWND control);
-    static void DrawButton(const DRAWITEMSTRUCT& item);
-    static void MeasureMenuItem(MEASUREITEMSTRUCT& item);
-    static void DrawMenuItem(const DRAWITEMSTRUCT& item);
-    static void DrawListBoxItem(const DRAWITEMSTRUCT& item, const std::vector<std::wstring>& items);
+    static COLORREF SelectionColor();
     static HFONT UiFont();
     static HFONT TitleFont();
     static HBRUSH WindowBrush();
@@ -46,5 +40,6 @@ public:
     static COLORREF MenuSeparatorColor();
     static COLORREF MenuIconColor();
     static bool IsDark();
+    static bool HighContrast();
 };
 }

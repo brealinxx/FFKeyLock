@@ -70,6 +70,7 @@ RECT ScrollThumbRect(const RECT& track, const State& state, int viewportHeight, 
 
 void UpdateScrollBar(HWND hwnd, State& state, int viewportHeight)
 {
+    UNREFERENCED_PARAMETER(hwnd);
     const int maxScroll = MaxScroll(state, viewportHeight);
     state.scrollY = std::clamp(state.scrollY, 0, maxScroll);
 }

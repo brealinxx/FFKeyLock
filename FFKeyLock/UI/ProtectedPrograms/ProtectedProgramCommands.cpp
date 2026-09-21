@@ -9,40 +9,6 @@ namespace FFKeyLock
 {
 namespace ProtectedProgramCommands
 {
-namespace
-{
-RoundedMenuItem MenuItem(UINT id, const std::wstring& text, const std::wstring& shortcut = L"", bool checked = false, bool enabled = true)
-{
-    RoundedMenuItem item{};
-    item.id = id;
-    item.text = text;
-    item.shortcut = shortcut;
-    item.checked = checked;
-    item.enabled = enabled;
-    return item;
-}
-
-RoundedMenuItem MenuSeparator()
-{
-    RoundedMenuItem item{};
-    item.separator = true;
-    item.enabled = false;
-    return item;
-}
-}
-
-std::vector<RoundedMenuItem> BuildContextMenu()
-{
-    return {
-        MenuItem(IDM_EDIT_GAME_PROFILE, Text(L"独立配置...", L"Game profile...")),
-        MenuSeparator(),
-        MenuItem(IDM_COPY_GAME_NAME, Text(L"复制名称", L"Copy name"), L"Ctrl+C"),
-        MenuItem(IDM_OPEN_GAME_FOLDER, Text(L"跳转到该程序文件夹", L"Open program folder")),
-        MenuSeparator(),
-        MenuItem(IDM_DELETE_SELECTED_GAME, Text(L"删除选中", L"Delete selected")),
-    };
-}
-
 void CopyNameToClipboard(HWND owner, const std::wstring& name)
 {
     if (name.empty() || !OpenClipboard(owner))
