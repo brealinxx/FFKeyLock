@@ -40,6 +40,10 @@
 *.app
 
 # Build directories
+Debug/
+Release/
+x64/
+installer/output/
 build/
 Build/
 build-*/
@@ -55,6 +59,9 @@ compile_commands.json
 # Temporary files
 *.tmp
 *.log
+*.tlog
+*.recipe
+*.aps
 *.bak
 *.swp
 

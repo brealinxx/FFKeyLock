@@ -5,5 +5,15 @@ F:\VisualStudioProject\FFKeyLock\FFKeyLock\GameProtection.cpp;F:\VisualStudioPro
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\InputLanguage.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\InputLanguage.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\Localization.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\Localization.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\MainWindow.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\MainWindow.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\NotificationIdentity.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\NotificationIdentity.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\OverlayNotificationManager.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\OverlayNotificationManager.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\Platform\DpiUtils.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\DpiUtils.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\Platform\GdiUtils.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\GdiUtils.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\StringUtils.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\StringUtils.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\ThemeManager.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\ThemeManager.obj
 F:\VisualStudioProject\FFKeyLock\FFKeyLock\TrayIcon.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\TrayIcon.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Controls\ContentPanel.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\ContentPanel.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Controls\RoundedButton.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\RoundedButton.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Controls\ToggleSwitch.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\ToggleSwitch.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\UI\Menu\RoundedMenu.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\RoundedMenu.obj
+F:\VisualStudioProject\FFKeyLock\FFKeyLock\WindowsKeyGuard.cpp;F:\VisualStudioProject\FFKeyLock\FFKeyLock\Debug\WindowsKeyGuard.obj

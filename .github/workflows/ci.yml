@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_arch }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x64
+            artifact_arch: x64
+            artifact_path: x64/Release/FFKeyLock.exe
+            smoke_test: true
+          - platform: Win32
+            artifact_arch: x86
+            artifact_path: Release/FFKeyLock.exe
+            smoke_test: true
+          - platform: ARM64
+            artifact_arch: arm64
+            artifact_path: ARM64/Release/FFKeyLock.exe
+            smoke_test: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install ARM64 C++ tools
+        if: matrix.platform == 'ARM64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio was not found."
+          }
+
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          & $installer modify `
+            --installPath $vsPath `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
+            --quiet `
+            --norestart `
+            --nocache `
+            --wait
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+            throw "Failed to install ARM64 C++ tools. Exit code: $LASTEXITCODE"
+          }
+
+      - name: Build Release ${{ matrix.artifact_arch }}
+        run: msbuild FFKeyLock.slnx /t:Rebuild /p:Configuration=Release /p:Platform=${{ matrix.platform }} /m
+
+      - name: Verify runtime dependencies
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio with VC tools was not found."
+          }
+
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object { $_.FullName -like "*\Hostx64\x64\dumpbin.exe" } |
+            Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "dumpbin.exe was not found."
+          }
+
+          $deps = & $dumpbin.FullName /DEPENDENTS "${{ matrix.artifact_path }}"
+          $deps | Out-String | Write-Host
+
+          $forbidden = $deps | Select-String -Pattern "MSVCP|VCRUNTIME|api-ms-win-crt"
+          if ($forbidden) {
+            throw "Release executable depends on VC++ runtime DLLs. Build must use the static runtime (/MT)."
+          }
+
+      - name: Regression tests
+        if: matrix.smoke_test
+        shell: pwsh
+        run: |
+          msbuild tests/FFKeyLock.Tests.vcxproj /p:Configuration=Release /p:Platform=${{ matrix.platform }} /m
+          if ($LASTEXITCODE -ne 0) { throw "Test build failed." }
+          & "tests/artifacts/${{ matrix.platform }}/FFKeyLock.Tests.exe" "$PWD/tests/artifacts"
+          if ($LASTEXITCODE -ne 0) { throw "Regression tests failed." }
+
+      - name: Smoke test executable startup
+        if: matrix.smoke_test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "$PWD\${{ matrix.artifact_path }}" -PassThru
+          Start-Sleep -Seconds 3
+          $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+          if (-not $running) {
+            throw "FFKeyLock.exe exited immediately during startup smoke test."
+          }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFKeyLock-${{ matrix.artifact_arch }}-Release
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error

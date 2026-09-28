@@ -1,0 +1,148 @@
+# CHANGELOG
+
+## v0.6.0
+
+- Fixed native scrollbar flashes during hover/position updates and duplicate submenu arrows; added immediate-pixel and menu-highlight checks in both themes.
+- Simplified both READMEs and added localized interface screenshots.
+
+- Unified client-area rendering, with a themed client menu bar and native popup menus. The game library and running-app picker share complete background and scrollbar rendering.
+- Scrolling repaints the viewport and children without copying clipped pixels or layered window composition; added visible-window repaint equivalence checks.
+- Separated rendering, scrolling, library, menu and profile editing modules; moved unused legacy UI to archive/legacy-ui outside the build.
+
+- Reworked editor scrolling around a fixed viewport and one content window, with stable control geometry and scrollbar width, DPI-adjusted scroll offsets, precise wheel input and focus scrolling.
+- Unified spacing, typography and blue accents; fixed light backgrounds on dark checkboxes, dropdowns and the editor scrollbar, restored button focus cues, and cached game icons across filtering and theme changes.
+- Standardized the preset name as accidental press protection and added hidden native-window regression checks for layout, scrolling, themes and unsaved drafts.
+
+- Added an accidental press protection preset for F1–F12, Print Screen, Scroll Lock and Pause / Break, with per-key exceptions.
+- Rebuilt the native workspace around a searchable game library and embedded keyboard/profile editor.
+- Added running-window selection, profile copy/paste, library import/export, timed pause, emergency unlock and a local key test.
+- Separated input-language protection from key blocking; chat keeps the selected keys blocked.
+- Moved keyboard interception to a dedicated message thread and preserved down/up pairing across focus changes.
+- Added full-path game identities, versioned INI sections, migration backups and atomic configuration replacement.
+- Fixed global defaults overwriting game profiles, empty libraries repopulating, delayed activation and stale chat events.
+- Retained native accessibility and keyboard navigation; improved DPI layout, high-contrast colors and idle updates.
+- Added portable configuration, background startup and isolated regression coverage.
+
+## v0.5.0
+
+### Added
+
+- Added a dedicated profile for every protected executable, including target input language, chat keys, chat mode, restore timeout, Windows-key locking, and notification preference.
+- Added a chat-input state machine supporting Enter, T, Y, and `/`, with toggle-to-chat and hold-to-chat modes.
+- Added immediate protection restoration through Enter/Esc and a per-game timeout fallback.
+- Added Windows-key lock scope: protected foreground only by default, plus an advanced always-lock option.
+- Added Tab, Shift+Tab, arrow-key, Space, and Enter support for custom-drawn buttons, together with accessible focus-name notifications.
+
+### Changed
+
+- Replaced foreground polling with event-driven `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` detection, retaining a 15-second fallback timer and automatically using a 1-second fallback if the hook cannot be installed.
+- Redesigned cards, buttons, and status areas with a more modern dark appearance and NVIDIA-green accents.
+- Reworked overlay rendering and animation around a cached surface, DWM synchronization, and short-lived high-resolution timing, while positioning overlays above Windows toast notifications.
+- Overlay notifications now respect the Windows reduced-animation setting and display without transitions when animations are disabled.
+- Windows-key status now shows the effective lock state and whether the scope is game foreground only or always.
+- Updated the project version to `v0.5.0` / `0.5.0`.
+
+### Fixed
+
+- Fixed uneven custom-overlay animation and avoidable per-frame rendering overhead.
+- Fixed custom-drawn buttons not supporting keyboard focus or activation, and added a clear focus indicator with automatic focus scrolling.
+- Fixed overlap and unexpected truncation between the protected-program-list title and its help button.
+- Fixed GDI object lifetime issues and unnecessary repeated foreground-process queries.
+- Fixed per-game profiles not being removed when resetting settings or deleting a protected executable.
+- Fixed EXE properties reporting version `0.0.0.0`, and switched to proper MSBuild merging for DPI, Windows compatibility, and Segment Heap manifest metadata.
+
+## v0.4
+
+### Added
+
+- Added multi-architecture build and release coverage for x64, x86, and ARM64.
+- Added Windows 10 / Windows 11 compatibility metadata to the application manifest.
+- Added a tray menu action for adding the current program without opening the main window.
+
+### Changed
+
+- Updated project version references to `v0.4` / `0.4.0`.
+- Renamed "Add program" to "Add current program" for clearer intent.
+- Changed protection-entry notifications to use overlay notifications instead of system toast notifications.
+- Made tray menu sizing independent from the main window DPI when the window moves between monitors.
+- Improved tray "Add current program" targeting by ignoring Windows shell processes and selecting the nearest real application window.
+- Extended packaging and GitHub release automation to produce architecture-specific installer and portable artifacts.
+
+### Fixed
+
+- Fixed tray Exit so it fully terminates the application instead of only hiding UI elements.
+- Fixed title bar colors not always updating immediately after theme changes.
+- Fixed accidental protected-program additions caused by stray command messages.
+- Fixed cases where tray "Add current program" could add `explorer.exe` or `ShellExperienceHost.exe`.
+
+## v0.3
+
+### Added
+
+- Added `UI/ProtectedPrograms/ProtectedProgramListView` as a dedicated protected program list control.
+- Added `UI/ProtectedPrograms/ProtectedProgramCommands` to centralize list-related commands.
+- Added `UI/Main/MainContentView` as the entry point for future main content view extraction.
+- Added an Inno Setup installer script with English / Simplified Chinese wizard support and first-launch display language selection.
+- Added GitHub Actions workflows for CI and tag-based release publishing.
+
+### Changed
+
+- Refactored the main window UI structure to reduce the responsibility and complexity of `MainWindow.cpp`.
+- Moved list drawing, hit testing, selection state, internal scrolling, and context menu logic out of `MainWindow.cpp`.
+- Updated project version references to `v0.3` / `0.3.0`.
+- Updated the Visual Studio / MSBuild project files to include the new UI modules.
+- Updated `.gitignore` to ignore Visual Studio build directories and common intermediate files.
+
+### Fixed
+
+- Fixed mixed responsibilities caused by the main window directly owning protected list state.
+- Fixed scattered list context menu hit-testing logic that made the main window harder to maintain.
+- Fixed the risk of build artifacts being accidentally tracked by version control.
+- Fixed the missing installer packaging and release automation path.
+
+## v0.2
+
+### Added
+
+- Added a protected program list for executables that FFKeyLock should guard.
+- Added support for adding the current foreground program.
+- Added support for adding `.exe` files through a file picker.
+- Added a protected program browser window for viewing program names and recorded paths.
+- Added a list context menu for copying program names or opening program folders.
+- Added Chinese / English UI switching and theme settings.
+
+### Changed
+
+- Improved protected list configuration persistence so added or deleted items are saved consistently.
+- Expanded settings, notification, and help menus with more common actions.
+- Improved the main window layout for protected program buttons and the list area.
+
+### Fixed
+
+- Fixed missing guidance when an item only has a program name and no saved path.
+- Fixed unstable selection state after deleting the selected protected program.
+- Fixed unclear empty-state feedback when the protected program list has no items.
+
+## v0.1
+
+### Added
+
+- Initial release with a lightweight native Win32 tray utility foundation.
+- Added foreground window detection and protected executable recognition.
+- Added game protection mode, switching input language to English while a protected program is active.
+- Added input language restoration after leaving a protected program.
+- Added basic toggles for protection mode, auto detection, and startup.
+- Added Windows key locking to reduce accidental interruptions during games.
+- Added INI-based configuration for user settings.
+
+### Changed
+
+- Built the app with native Win32, C++20, and Windows Shell tray icon APIs.
+- Used short-interval foreground window polling for auto detection without an extra background service.
+- Stored user configuration under `%APPDATA%\FFKeyLock\config.ini`.
+
+### Fixed
+
+- Fixed unreliable game input caused by accidental input language switching.
+- Fixed missing automatic input language restoration after leaving a game.
+- Fixed accidental Windows key presses interrupting gameplay.

@@ -1,53 +1,63 @@
 # FFKeyLock
 
-FFKeyLock 是一个轻量级 Windows 托盘工具，用来减少游戏时输入法误切换带来的干扰。它会检测当前前台窗口，识别已配置的游戏进程，并在游戏保护状态下把输入法切换到英文。
+轻量的 Windows 游戏防误触工具。为每个游戏设置锁键和输入法策略，进入游戏自动应用，切回桌面自动解除游戏专属保护。
 
-[English](README.md)
+[English](README.md) · [下载最新版](https://github.com/brealinxx/FFKeyLock/releases/latest) · [更新日志](CHANGELOG.md)
 
-## 技术栈
+![FFKeyLock 中文界面：游戏库与防误触配置](Assets/intro_cn.png)
 
-- 原生 Win32 桌面应用
-- C++20
-- Windows Shell 托盘图标 API
-- Windows 输入语言 API
-- INI 用户配置
-- Visual Studio / MSBuild 工程
+## 快速开始
 
-## 轻量设计
+1. 下载适合电脑的安装包或 ZIP，运行 FFKeyLock（支持 Windows 10 / 11，x64、x86、ARM64）。
+2. 点击“选择文件”或“运行中程序”，添加真正的游戏程序，而非启动器。
+3. 点击“防误触预设”，再点击游戏需要使用的键将其放行；只需锁键时关闭“输入法保护”。
+4. 点击“保存配置”，返回游戏后自动生效。关闭主窗口会留在托盘，需要退出时使用菜单。
 
-FFKeyLock 直接基于 Win32 编写，不依赖浏览器运行时、托管框架或后台服务。程序以小型托盘应用运行，使用简单配置文件保存设置，并通过短间隔轮询前台窗口完成游戏检测。
+**紧急解除：`Ctrl + Alt + Backspace`。** 也可在设置中改为 `Ctrl + Alt + End / Home`。紧急解除后需手动恢复保护；普通暂停可选择 30 秒、5 分钟或直到手动恢复。
 
-## 主要功能
+## 能做什么
 
-- 游戏保护时自动切换当前输入语言到英文。
-- 支持禁用或开启 Win 键，减少游戏中误触导致的打断。
-- 离开受保护游戏窗口后恢复之前的输入语言。
-- 根据可配置的进程列表自动检测游戏。
-- 支持添加当前前台程序，或通过浏览选择 `.exe` 文件添加游戏。
-- 托盘菜单可快速控制保护模式、自动检测、开机启动和输入法切换。
-- 支持在“设置 -> 语言”中切换中文和英文界面。
-- 支持开机启动，便于常驻保护。
+- **逐游戏防误触**：预设锁定 F1–F12、PrtSc、Scroll Lock、Pause / Break；可逐键调整，支持额外功能键与媒体键。
+- **独立输入法保护**：锁键与输入法分别开关；支持游戏聊天时释放输入法控制，同时继续锁键。
+- **方便管理**：搜索游戏、复制粘贴配置、导入导出；按完整路径区分同名程序。
+- **托盘常驻**：暂停、恢复、开机启动和通知均可配置；支持中英文、深浅主题与键盘导航。
+- **原生轻量**：C++20 / Win32，无浏览器运行时、托管框架、后台服务或驱动，不向游戏注入代码。
 
-## 构建
+列表选择的是编辑对象，保护跟随前台游戏。未保存修改不会自动生效；主题切换保留草稿。全局 Win 键策略可单独设为始终锁定，启用该范围后也会影响桌面。
 
-可以用 Visual Studio 打开 `FFKeyLock.slnx`，也可以使用 MSBuild 构建：
+## 配置与兼容性
+
+默认配置保存在 `%APPDATA%\FFKeyLock\config.ini`。在程序旁创建 `portable.ini`，或使用 `--config "C:\path\config.ini"`，即可使用独立配置；`--background` 直接进入托盘。
+
+旧配置迁移前保留 `.v1.bak`；无效配置在后续保存前保留 `.invalid.bak`。导入仅合并游戏配置，不覆盖当前全局设置；清空游戏库后不会自动补回默认条目。
+
+窗口内按键测试只在 FFKeyLock 前台有效。带反作弊、特殊输入方式或更高权限的游戏仍需实测；本地测试通过不代表所有游戏兼容。Ctrl、Alt 和紧急解除键始终保留。
+
+## 开发与验证
+
+需要 Visual Studio C++ 工具集 **v145**、Windows SDK 10.0 和 MSBuild。打开 `FFKeyLock.slnx`，或运行：
 
 ```powershell
-MSBuild.exe FFKeyLock.slnx /p:Configuration=Debug /p:Platform=x64 /m
+MSBuild.exe FFKeyLock.slnx /p:Configuration=Release /p:Platform=x64 /m
+MSBuild.exe tests/FFKeyLock.Tests.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+tests/artifacts/x64/FFKeyLock.Tests.exe tests/artifacts
 ```
 
-Debug 可执行文件会生成到 `x64/Debug/FFKeyLock.exe`。
+x64 程序输出到 `x64/Release/FFKeyLock.exe`。其他架构使用 `Platform=Win32` 或 `ARM64`（需要对应工具）；测试支持 x64 / Win32。
 
-## 配置
+<details>
+<summary>安装包构建</summary>
 
-用户设置保存于：
+安装 Inno Setup 并先构建对应架构，再运行：
 
-```text
-%APPDATA%\FFKeyLock\config.ini
+```powershell
+ISCC.exe /DAppArchitecture=x64 installer/FFKeyLock.iss
 ```
 
-配置内容包括保护开关、自动检测开关、界面语言和受保护游戏进程列表。
+架构可选 `x64`、`x86`、`arm64`，产物位于 `installer/output/`。
 
-## 许可证
+</details>
 
-见 [LICENSE](LICENSE)。
+详细记录与实测边界见 [验证记录](tests/VERIFICATION.md)；维护入口见 [AGENTS.md](AGENTS.md) 与 [UI 结构说明](FFKeyLock/UI/README.md)。
+
+[MIT License](LICENSE)
