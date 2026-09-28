@@ -2,14 +2,13 @@
 
 ## v0.6.1
 
-- Move the local key test near the top of the profile editor and spell out Backspace in the emergency shortcut hint.
+Release date: 2026-09-28.
 
+- Move the local key test near the top of the profile editor and spell out Backspace in the emergency shortcut hint.
 - Validate tag, source, manifest, installer and built artifact versions before release; reject mismatches before packaging.
 - Include an isolated portable configuration in ZIP packages; preserve existing settings and language during installer upgrades.
 - Develop on dev, remove tracked Debug artifacts and standardize text line endings.
-
 - Fix native white scrollbars appearing while dragging, holding an arrow or paging in long dropdowns such as Additional keys. Preserve wheel input, keyboard navigation and item selection, with popup capture and dismissal checks.
-
 - Unify scroll-panel backgrounds, 12-DIP corners and subtle borders, with neutral hover/drag thumb colors. Fix uninitialized thumb geometry and native tracking-loop painting; align button and field corners and add panel-corner and native scrolling checks.
 
 ## v0.6.0

@@ -4,6 +4,8 @@
 
 [English](README.md) · [下载最新版](https://github.com/brealinxx/FFKeyLock/releases/latest) · [更新日志](CHANGELOG.md)
 
+[v0.6.1 发布说明](https://github.com/brealinxx/FFKeyLock/releases/tag/v0.6.1)：滚动与主题修复、便携包配置和升级设置保留。
+
 ![FFKeyLock 中文界面：游戏库与防误触配置](Assets/intro_cn.png)
 
 ## 快速开始

@@ -4,6 +4,8 @@ A lightweight Windows utility that prevents accidental key presses in games. Set
 
 [简体中文](README.zh-CN.md) · [Download](https://github.com/brealinxx/FFKeyLock/releases/latest) · [Changelog](CHANGELOG-en.md)
 
+[v0.6.1 release notes](https://github.com/brealinxx/FFKeyLock/releases/tag/v0.6.1): scrolling/theme fixes, portable configuration and upgrade settings preservation.
+
 ![FFKeyLock English interface: game library and key-blocking profile](Assets/intro_en.png)
 
 ## Quick start

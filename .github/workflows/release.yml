@@ -27,6 +27,9 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $version = & ./scripts/Test-ReleaseVersion.ps1 -Tag $env:RELEASE_TAG
+          if (-not (Test-Path "docs/releases/$($env:RELEASE_TAG).md" -PathType Leaf)) {
+            throw "Release notes are missing for $env:RELEASE_TAG."
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Release tooling regression tests
@@ -213,6 +216,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: FFKeyLock ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
           fail_on_unmatched_files: true
           files: |
             installer/output/FFKeyLock-Setup-v${{ steps.version.outputs.version }}-x64.exe
