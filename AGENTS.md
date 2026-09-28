@@ -1,6 +1,6 @@
 # FFKeyLock 维护指引
 
-本文件适用于 Astra 及其他维护本仓库的开发代理。开始修改前先阅读本文件，再阅读涉及模块的实现；以当前代码和用户最新要求为准。本文描述的是 2026-09-21 的 v0.6.0 工作区，后续改变架构、构建或配置格式时同步更新本文。
+本文件适用于 Astra 及其他维护本仓库的开发代理。开始修改前先阅读本文件，再阅读涉及模块的实现；以当前代码和用户最新要求为准。本文描述的是 2026-09-28 的 v0.6.1 工作区，后续改变架构、构建或配置格式时同步更新本文。
 
 ## 1. 产品目标与不可退化的体验
 
@@ -17,10 +17,11 @@ FFKeyLock 是原生 Windows 游戏键盘保护工具，使用 C++20、Unicode Wi
 ## 2. 开始工作时
 
 1. 查看 `git status --short` 和相关文件的差异。工作区可能包含上一轮尚未提交的完整改动，不能假定所有差异都是自己产生的；不要重置、清理或覆盖它们。
-2. 阅读 [README.zh-CN.md](README.zh-CN.md)、[CHANGELOG.md](CHANGELOG.md) 和 [tests/VERIFICATION.md](tests/VERIFICATION.md)，了解功能与已知验证边界。
-3. 先读 [AppState.h](FFKeyLock/AppState.h)，再按下表定位入口和调用方。优先用 `rg` 搜索符号，确认文件是否实际参与当前界面。
-4. 修改前明确受影响的是配置草稿、已保存配置、当前游戏会话还是输入线程快照，不要混用这些状态。
-5. 只做与任务相关的改动。需要新增源文件时，同时维护主项目 `.vcxproj` 和 `.vcxproj.filters`。
+2. 开发前先切换到 `dev` 分支。切换前完整保留已有改动；分支落后或分叉时先检查历史，再合入当前主线，不能重置覆盖。完成验证后按用户授权同步分支；分支同步不等于授权创建发布 tag 或发布 Release。
+3. 阅读 [README.zh-CN.md](README.zh-CN.md)、[CHANGELOG.md](CHANGELOG.md) 和 [tests/VERIFICATION.md](tests/VERIFICATION.md)，了解功能与已知验证边界。
+4. 先读 [AppState.h](FFKeyLock/AppState.h)，再按下表定位入口和调用方。优先用 `rg` 搜索符号，确认文件是否实际参与当前界面。
+5. 修改前明确受影响的是配置草稿、已保存配置、当前游戏会话还是输入线程快照，不要混用这些状态。
+6. 只做与任务相关的改动。需要新增源文件时，同时维护主项目 `.vcxproj` 和 `.vcxproj.filters`。
 
 ## 3. 模块导航
 
@@ -36,12 +37,12 @@ FFKeyLock 是原生 Windows 游戏键盘保护工具，使用 C++20、Unicode Wi
 | [MainWindow.cpp](FFKeyLock/MainWindow.cpp) | 原生主窗口、命令/消息分发、设置；菜单和运行中程序选择器已独立至 UI 模块。避免重新把业务和编辑器实现堆入此文件。 |
 | [UI/Main/MainContentView.cpp](FFKeyLock/UI/Main/MainContentView.cpp) | 当前主界面：游戏列表、搜索、选择、草稿保存/放弃、复制粘贴配置。 |
 | [UI/Profiles/ProfileEditor.cpp](FFKeyLock/UI/Profiles/ProfileEditor.cpp) | 嵌入式配置草稿编辑器：键盘、预设、输入法选项、脏状态与测试反馈。 |
-| [UI/Controls/ScrollView.cpp](FFKeyLock/UI/Controls/ScrollView.cpp) | 固定视口、`FFKeyLockScrollContent` 内容子窗口、原生滚动条、焦点和滚轮处理；滚动只移动窗口并完整重绘，不重排控件。 |
+| [UI/Controls/ScrollView.cpp](FFKeyLock/UI/Controls/ScrollView.cpp) | 圆角外层、`FFKeyLockScrollViewport` 内缩固定视口、`FFKeyLockScrollContent` 内容子窗口、原生滚动条、焦点和滚轮处理；滚动只移动窗口并完整重绘，不重排控件。 |
 | [UI/Library/GameLibraryView.cpp](FFKeyLock/UI/Library/GameLibraryView.cpp) | 原生两行列表、空白区、独立滚动条、图标缓存；主界面与运行中程序选择器共用。 |
 | [UI/Menu](FFKeyLock/UI/Menu) | `AppMenus` 构建菜单，`MenuBar` 提供客户区入口与 Alt / F10 导航，`PopupMenu` 装饰原生弹出菜单；活动菜单更新延后替换。 |
 | [UI/Windows/RunningProgramPicker.cpp](FFKeyLock/UI/Windows/RunningProgramPicker.cpp) | 运行中程序枚举与选择。 |
 | [ThemeManager.cpp](FFKeyLock/ThemeManager.cpp)、[Platform](FFKeyLock/Platform) | 配色、字体、高对比度、标题栏、DPI 与 GDI 资源管理。 |
-| [UI/Rendering](FFKeyLock/UI/Rendering) | `Surface` 完整绘制容器背景；`NativeControls` 统一控件绘制，保留原生控件状态和输入。具体约定见 [UI/README.md](FFKeyLock/UI/README.md)。 |
+| [UI/Rendering](FFKeyLock/UI/Rendering) | `Surface` 完整绘制容器背景；`NativeControls` 统一控件绘制，组合框列表使用主题滚动条子窗口，保留原生选择、键盘与滑块输入。具体约定见 [UI/README.md](FFKeyLock/UI/README.md)。 |
 | [TrayIcon.cpp](FFKeyLock/TrayIcon.cpp)、[OverlayNotificationManager.cpp](FFKeyLock/OverlayNotificationManager.cpp) | 托盘与提示；醒目浮层启用时避免再弹重复通知。 |
 | [tests/RegressionTests.cpp](tests/RegressionTests.cpp)、[tests/UIRenderingTests.cpp](tests/UIRenderingTests.cpp) | 状态、按键配对、配置、隐藏编辑器回归；独立可见窗口的像素一致性与交互验证。 |
 | [installer/FFKeyLock.iss](installer/FFKeyLock.iss)、[.github/workflows](.github/workflows) | Inno Setup 安装包、构建与发布流水线。 |
@@ -128,6 +129,20 @@ if (-not $msbuildPath) { throw '未找到 MSBuild，请检查 Visual Studio C++ 
 
 安装包需要 Inno Setup；已构建对应架构后执行 `ISCC.exe /DAppArchitecture=x64 installer/FFKeyLock.iss`，其他架构参数是 `x86`、`arm64`。检查脚本中的产物路径与输出位置，不要把未构建的架构打包。
 
+发布版本校验与便携包生成（ZIP 默认携带空游戏库的 `portable.ini`）：
+
+```powershell
+powershell -File scripts/Test-ReleaseVersion.ps1 -Tag v0.6.1
+powershell -File tests/ReleaseTooling.Tests.ps1
+powershell -File scripts/New-PortablePackage.ps1 -Architecture x64
+```
+
+版本校验覆盖版本头、manifest、安装脚本默认值和中英文日志；`-Artifacts` 可额外校验 EXE/安装包的文件和产品版本。CI 覆盖 `dev`，Release workflow 在打包前检查 tag 与产物版本。安装脚本通过 `installer/InitializeLanguage.iss` 仅初始化不存在的配置文件，升级保留已有文件并跳过首次语言选择页。
+
+发布工具测试还包括 `tests/InstallerLanguage.Tests.ps1`（需 Inno Setup 的 `ISCC.exe`）和 `tests/PortablePackage.Tests.ps1 -Archive <ZIP 路径>`；前者只运行隔离测试安装器，不安装主程序。实体输入与真实升级步骤见 [实机验收清单](tests/MANUAL-RELEASE-CHECKLIST.md)。
+
+文本统一使用 LF（`.gitattributes`）；Debug、Release、ARM64、测试产物和 `dist/` 不纳入版本控制。
+
 SDK 访问被沙箱阻止、缺少 ARM64 工具链或没有 Inno Setup，都属于环境问题；如实报告并完成可执行的验证，不要为了掩盖环境错误随意降低工具集或移除架构。
 
 ## 8. 验证范围与安全的本机运行
@@ -147,7 +162,7 @@ SDK 访问被沙箱阻止、缺少 ARM64 工具链或没有 Inno Setup，都属�
 7. 损坏配置、保存失败、导入失败、空列表和旧版迁移不丢数据。
 8. Tab 导航、未保存草稿、主题、高对比度、不同 DPI 和窄窗口布局。
 
-截至本文日期，本轮 UI 重构后的 x64 和 Win32 发布构建、各 153 项回归断言及各 108 项可见 UI 检查已通过（含 96／120 DPI 隐藏编辑器验证）。详细记录在 [tests/VERIFICATION.md](tests/VERIFICATION.md)；这只是历史结果，不代表后续修改自动通过。实体键盘/真实游戏/反作弊、完整界面交互与跨屏 DPI、ARM64 和安装包仍有未验证项，必须区分“自动测试通过”和“实机验收通过”。不要把一次空闲资源采样当作性能保证。
+截至本文日期，v0.6.1 的 x64 和 Win32 发布构建、各 153 项回归断言已通过；相同 UI 源码的滚动面板与下拉列表修复已通过各 331 项可见 UI 检查（含 96／120 DPI 隐藏编辑器验证、四角背景、滑块几何/悬停/原生拖动、下拉列表箭头/轨道/捕获及键盘滚动）。详细记录在 [tests/VERIFICATION.md](tests/VERIFICATION.md)；这只是历史结果，不代表后续修改自动通过。实体键盘/真实游戏/反作弊、完整界面交互与跨屏 DPI、ARM64 和真实安装升级仍有未验证项，必须区分“自动测试通过”和“实机验收通过”。不要把一次空闲资源采样当作性能保证。
 
 ## 9. 交付与文档维护
 

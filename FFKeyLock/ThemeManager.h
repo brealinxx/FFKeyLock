@@ -27,6 +27,13 @@ public:
     static COLORREF MutedTextColor();
     static COLORREF DisabledTextColor();
     static COLORREF BorderColor();
+    static COLORREF PanelBorderColor();
+    static COLORREF ScrollThumbColor(bool hot, bool pressed);
+    static constexpr int PanelRadius = 12;
+    static constexpr int ControlRadius = 6;
+    static constexpr int PanelInset = 8;
+    // Keep a native-sized hit target around the 8-DIP visual thumb.
+    static constexpr int ScrollBarWidth = 16;
     static COLORREF AccentColor();
     static COLORREF ButtonColor();
     static COLORREF ButtonHotColor();

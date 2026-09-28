@@ -207,8 +207,8 @@ void CreateControls(HWND hwnd)
     for (int id : {Auto, Input, Keys, InheritWin, LockWin, Notify, Advanced, Test, ChatEnter, ChatT, ChatY, ChatSlash})
         Control(hwnd, L"BUTTON", id, WS_TABSTOP | BS_AUTOCHECKBOX);
     for (int id : {Cat, Clear, AddKey}) Control(hwnd, L"BUTTON", id, WS_TABSTOP | BS_PUSHBUTTON);
-    for (int id : {Language, Mode, OtherKey}) Control(hwnd, L"COMBOBOX", id, WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL);
-    Control(hwnd, L"EDIT", Timeout, WS_TABSTOP | WS_BORDER | ES_NUMBER);
+    for (int id : {Language, Mode, OtherKey}) Control(hwnd, L"COMBOBOX", id, WS_TABSTOP | CBS_DROPDOWNLIST);
+    Control(hwnd, L"EDIT", Timeout, WS_TABSTOP | ES_NUMBER);
     for (int id = 2200; id <= 2206; ++id) Control(hwnd, L"STATIC", id, 0);
     Control(hwnd, L"STATIC", TestStatus, 0);
     for (int id : {2200, 2206}) SetPropW(Item(hwnd, id), L"FFKeyLock.MutedText", reinterpret_cast<HANDLE>(1));
@@ -323,7 +323,7 @@ LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM w, LPARAM l)
         return 0;
     case WM_DRAWITEM:
         UI::DrawButton(*reinterpret_cast<DRAWITEMSTRUCT*>(l)); return TRUE;
-    case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX: case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX: case WM_CTLCOLORBTN: case WM_CTLCOLORSCROLLBAR:
         return reinterpret_cast<LRESULT>(UI::HandleCtlColor(hwnd, reinterpret_cast<HDC>(w), reinterpret_cast<HWND>(l)));
     case WM_PAINT: case WM_PRINTCLIENT: case WM_ERASEBKGND: return UI::PaintSurface(hwnd, message, w);
     case WM_DESTROY: StopKeyboardTest(); return 0;

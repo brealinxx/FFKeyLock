@@ -21,19 +21,22 @@
 - **独立输入法保护**：锁键与输入法分别开关；支持游戏聊天时释放输入法控制，同时继续锁键。
 - **方便管理**：搜索游戏、复制粘贴配置、导入导出；按完整路径区分同名程序。
 - **托盘常驻**：暂停、恢复、开机启动和通知均可配置；支持中英文、深浅主题与键盘导航。
+- **统一主题界面**：游戏列表与配置区使用圆角细边框；滚动轨道跟随面板背景，滑块悬停和拖动时增强对比，支持滚轮及键盘滚动；下拉列表滚动时也保持主题外观。
 - **原生轻量**：C++20 / Win32，无浏览器运行时、托管框架、后台服务或驱动，不向游戏注入代码。
 
 列表选择的是编辑对象，保护跟随前台游戏。未保存修改不会自动生效；主题切换保留草稿。全局 Win 键策略可单独设为始终锁定，启用该范围后也会影响桌面。
 
 ## 配置与兼容性
 
-默认配置保存在 `%APPDATA%\FFKeyLock\config.ini`。在程序旁创建 `portable.ini`，或使用 `--config "C:\path\config.ini"`，即可使用独立配置；`--background` 直接进入托盘。
+安装版默认配置保存在 `%APPDATA%\FFKeyLock\config.ini`，升级保留已有配置和显示语言。ZIP 便携包自带空游戏库的 `portable.ini`，配置直接保存在解压目录；更新便携版时保留自己的 `portable.ini`，不要用包内模板覆盖。在程序旁创建 `portable.ini`，或使用 `--config "C:\path\config.ini"`，即可使用独立配置；`--background` 直接进入托盘。
 
 旧配置迁移前保留 `.v1.bak`；无效配置在后续保存前保留 `.invalid.bak`。导入仅合并游戏配置，不覆盖当前全局设置；清空游戏库后不会自动补回默认条目。
 
 窗口内按键测试只在 FFKeyLock 前台有效。带反作弊、特殊输入方式或更高权限的游戏仍需实测；本地测试通过不代表所有游戏兼容。Ctrl、Alt 和紧急解除键始终保留。
 
 ## 开发与验证
+
+开发前先切换到 `dev` 分支，完成验证后再同步分支。
 
 需要 Visual Studio C++ 工具集 **v145**、Windows SDK 10.0 和 MSBuild。打开 `FFKeyLock.slnx`，或运行：
 
@@ -53,6 +56,8 @@ x64 程序输出到 `x64/Release/FFKeyLock.exe`。其他架构使用 `Platform=W
 ```powershell
 ISCC.exe /DAppArchitecture=x64 installer/FFKeyLock.iss
 ```
+
+打包前运行 `powershell -File scripts/Test-ReleaseVersion.ps1` 校验版本；便携 ZIP 使用 `powershell -File scripts/New-PortablePackage.ps1 -Architecture x64` 生成到 `dist/`。
 
 架构可选 `x64`、`x86`、`arm64`，产物位于 `installer/output/`。
 

@@ -167,7 +167,7 @@ void EditorTests()
     std::cout << "Hidden editor DPI: " << dpi << '\n';
     auto scale = [dpi](int n) { return MulDiv(n, dpi, 96); };
     SetWindowPos(editor, nullptr, 0, 0, scale(520), scale(340), SWP_NOZORDER | SWP_NOACTIVATE);
-    const HWND content = FindWindowExW(editor, nullptr, L"FFKeyLockScrollContent", nullptr);
+    const HWND content = FindWindowExW(FindWindowExW(editor, nullptr, L"FFKeyLockScrollViewport", nullptr), nullptr, L"FFKeyLockScrollContent", nullptr);
     const HWND scrollBar = FindWindowExW(editor, nullptr, L"SCROLLBAR", nullptr);
     auto item = [content](int id) { return GetDlgItem(content, id); };
     auto bounds = [](HWND hwnd, HWND relative) {
@@ -189,7 +189,7 @@ void EditorTests()
     const RECT after = bounds(key, content);
     CHECK(EqualRect(&before, &after));
     CHECK(SendMessageW(key, WM_GETFONT, 0, 0) == font);
-    CHECK(bounds(content, editor).top == -GetScrollPos(scrollBar, SB_CTL));
+    CHECK(bounds(content, GetParent(content)).top == -GetScrollPos(scrollBar, SB_CTL));
     SendMessageW(editor, WM_VSCROLL, SB_BOTTOM, 0);
     SCROLLINFO info{sizeof(info), SIF_ALL}; GetScrollInfo(scrollBar, SB_CTL, &info);
     CHECK(info.nPos == info.nMax - static_cast<int>(info.nPage) + 1);
@@ -218,7 +218,7 @@ void EditorTests()
     const int expandedBottom = GetScrollPos(scrollBar, SB_CTL);
     SendMessageW(item(2115), BM_CLICK, 0, 0); // Collapse while scrolled to the end.
     CHECK(GetScrollPos(scrollBar, SB_CTL) < expandedBottom);
-    CHECK(bounds(content, editor).top == -GetScrollPos(scrollBar, SB_CTL));
+    CHECK(bounds(content, GetParent(content)).top == -GetScrollPos(scrollBar, SB_CTL));
     // Crossing the no-scroll boundary must not resize the key grid.
     SetWindowPos(editor, nullptr, 0, 0, scale(520), scale(1800), SWP_NOZORDER | SWP_NOACTIVATE);
     CHECK(GetScrollPos(scrollBar, SB_CTL) == 0);
@@ -235,11 +235,11 @@ void EditorTests()
     NMCUSTOMDRAW draw{}; draw.hdr.hwndFrom = item(2100); draw.hdr.code = NM_CUSTOMDRAW;
     draw.dwDrawStage = CDDS_PREPAINT; draw.hdc = dc; GetClientRect(item(2100), &draw.rc);
     CHECK(SendMessageW(content, WM_NOTIFY, 2100, reinterpret_cast<LPARAM>(&draw)) == CDRF_SKIPDEFAULT);
-    CHECK(GetPixel(dc, draw.rc.right - 2, draw.rc.bottom - 2) == ThemeManager::WindowColor());
+    CHECK(GetPixel(dc, draw.rc.right - 2, draw.rc.bottom - 2) == ThemeManager::SurfaceColor());
     SendMessageW(item(2117), WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
-    CHECK(GetPixel(dc, 0, 0) == ThemeManager::WindowColor());
+    CHECK(GetPixel(dc, 0, 0) == ThemeManager::SurfaceColor());
     SendMessageW(scrollBar, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
-    CHECK(GetPixel(dc, 0, scale(100)) == ThemeManager::WindowColor());
+    CHECK(GetPixel(dc, 0, scale(100)) == ThemeManager::SurfaceColor());
     SelectObject(dc, previous); DeleteObject(bitmap); DeleteDC(dc); ReleaseDC(nullptr, screen);
     DestroyWindow(host); ThemeManager::Shutdown();
 }

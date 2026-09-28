@@ -64,10 +64,11 @@ void GameLibraryView::RefreshTheme()
 void GameLibraryView::Layout()
 {
     if (!list_) return;
-    RECT r{}; GetClientRect(window_, &r);
-    const int gutter = GetSystemMetricsForDpi(SM_CXVSCROLL, GetDpiForWindow(window_));
-    SetWindowPos(list_, nullptr, 0, 0, std::max(1, static_cast<int>(r.right) - gutter), r.bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW);
-    SetWindowPos(bar_, nullptr, std::max(0, static_cast<int>(r.right) - gutter), 0, gutter, r.bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
+    const RECT r = PanelInterior(window_);
+    const int gutter = DpiUtils::ScaleForWindow(window_, ThemeManager::ScrollBarWidth);
+    const int width = std::max(1, static_cast<int>(r.right - r.left) - gutter);
+    SetWindowPos(list_, nullptr, r.left, r.top, width, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW);
+    SetWindowPos(bar_, nullptr, r.left + width, r.top, std::max(0L, r.right - r.left - width), r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
     SyncScroll(); InvalidateSurface(window_);
 }
 void GameLibraryView::SyncScroll()
@@ -90,7 +91,7 @@ void GameLibraryView::Draw(const DRAWITEMSTRUCT& item)
 {
     GdiUtils::BufferedPaint buffer(item.hDC, item.rcItem); HDC dc = buffer.Dc();
     const bool selected = (item.itemState & ODS_SELECTED) != 0;
-    HBRUSH brush = CreateSolidBrush(selected ? ThemeManager::SelectionColor() : ThemeManager::WindowColor());
+    HBRUSH brush = CreateSolidBrush(selected ? ThemeManager::SelectionColor() : BackgroundColor(list_));
     FillRect(dc, &item.rcItem, brush); DeleteObject(brush);
     if (item.itemID < items_.size())
     {
@@ -132,10 +133,11 @@ LRESULT CALLBACK GameLibraryView::Proc(HWND hwnd, UINT message, WPARAM w, LPARAM
     {
         self = static_cast<GameLibraryView*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams);
         self->window_ = hwnd; SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        MarkPanel(hwnd);
         self->list_ = CreateWindowExW(0, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LBS_NOTIFY |
             LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
             0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1), g_hInst, nullptr);
-        self->bar_ = CreateWindowExW(0, L"SCROLLBAR", L"", WS_CHILD | WS_VISIBLE | SBS_VERT,
+        self->bar_ = CreateWindowExW(0, L"SCROLLBAR", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | SBS_VERT,
             0, 0, 0, 0, hwnd, nullptr, g_hInst, nullptr);
         SetWindowSubclass(self->list_, ListProc, 1, reinterpret_cast<DWORD_PTR>(self)); self->RefreshTheme(); return 0;
     }
@@ -168,7 +170,8 @@ LRESULT CALLBACK GameLibraryView::Proc(HWND hwnd, UINT message, WPARAM w, LPARAM
         }
         self->ScrollTo(next); return 0;
     }
-    case WM_CTLCOLORLISTBOX: return reinterpret_cast<LRESULT>(HandleCtlColor(hwnd, reinterpret_cast<HDC>(w), reinterpret_cast<HWND>(l)));
+    case WM_CTLCOLORLISTBOX: case WM_CTLCOLORSCROLLBAR:
+        return reinterpret_cast<LRESULT>(HandleCtlColor(hwnd, reinterpret_cast<HDC>(w), reinterpret_cast<HWND>(l)));
     case WM_PAINT: case WM_PRINTCLIENT: case WM_ERASEBKGND: return PaintSurface(hwnd, message, w);
     case WM_DESTROY:
         for (const auto& [path, icon] : self->icons_) if (icon) DestroyIcon(icon);

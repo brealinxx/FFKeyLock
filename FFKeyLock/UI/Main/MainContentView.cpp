@@ -66,7 +66,7 @@ void MainContentView::CreateControls()
     for (int id : {Status, Detail, Title, Path, Dirty, ListLabel}) Make(window_, L"STATIC", id, SS_LEFT);
     for (int id : {Detail, Path}) SetPropW(GetDlgItem(window_, id), L"FFKeyLock.MutedText", reinterpret_cast<HANDLE>(1));
     SetWindowLongPtrW(GetDlgItem(window_, Path), GWL_STYLE, WS_CHILD | WS_VISIBLE | SS_PATHELLIPSIS);
-    search_ = Make(window_, L"EDIT", Search, WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL);
+    search_ = Make(window_, L"EDIT", Search, WS_TABSTOP | ES_AUTOHSCROLL);
     list_ = library_.Create(window_, List);
     for (int id : {Save, Undo, Add, Running, Delete, Copy, Paste, Pause, Browse}) Make(window_, L"BUTTON", id, WS_TABSTOP | BS_PUSHBUTTON);
     editor_ = ProfileEditor::CreateEditor(window_);

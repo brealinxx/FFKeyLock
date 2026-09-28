@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
       - master
   pull_request:
 
@@ -36,6 +37,15 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Validate source versions
+        shell: pwsh
+        run: ./scripts/Test-ReleaseVersion.ps1
+
+      - name: Release tooling regression tests
+        if: matrix.platform == 'x64'
+        shell: pwsh
+        run: ./tests/ReleaseTooling.Tests.ps1
+
       - name: Install ARM64 C++ tools
         if: matrix.platform == 'ARM64'
         shell: pwsh
@@ -60,6 +70,10 @@ jobs:
 
       - name: Build Release ${{ matrix.artifact_arch }}
         run: msbuild FFKeyLock.slnx /t:Rebuild /p:Configuration=Release /p:Platform=${{ matrix.platform }} /m
+
+      - name: Verify executable version
+        shell: pwsh
+        run: ./scripts/Test-ReleaseVersion.ps1 -Artifacts @("${{ matrix.artifact_path }}")
 
       - name: Verify runtime dependencies
         shell: pwsh
@@ -98,7 +112,9 @@ jobs:
         if: matrix.smoke_test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath "$PWD\${{ matrix.artifact_path }}" -PassThru
+          $config = Join-Path $env:RUNNER_TEMP "FFKeyLock-smoke.ini"
+          "[Settings]`nVersion=2`nProtectionEnabled=0`n[Library]`nCount=0" | Set-Content $config
+          $process = Start-Process -FilePath "$PWD\${{ matrix.artifact_path }}" -ArgumentList @('--background', '--config', ('"' + $config + '"')) -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 3
           $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
           if (-not $running) {

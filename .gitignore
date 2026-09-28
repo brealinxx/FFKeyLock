@@ -43,6 +43,8 @@
 Debug/
 Release/
 x64/
+ARM64/
+dist/
 installer/output/
 build/
 Build/
@@ -60,6 +62,8 @@ compile_commands.json
 *.tmp
 *.log
 *.tlog
+*.res
+*.idb
 *.recipe
 *.aps
 *.bak
@@ -84,6 +88,8 @@ Testing/
 .vs*/
 [Tt]est[Rr]esults/
 
+# 2. 忽略 .NET 编译生成的输出目录（核心！）
+# C# 编译不仅生成 .exe/.dll，还会把所有依赖塞进 bin 和 obj
 [Bb]in/
 [Oo]bj/
 

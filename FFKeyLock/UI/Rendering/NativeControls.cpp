@@ -1,4 +1,5 @@
 #include "NativeControls.h"
+#include "Surface.h"
 #include "../../ThemeManager.h"
 #include "../../Platform/GdiUtils.h"
 #include <algorithm>
@@ -8,6 +9,153 @@ namespace FFKeyLock::UI
 {
 namespace
 {
+constexpr wchar_t kDropdownScroll[] = L"FFKeyLock.DropdownScroll";
+LRESULT CALLBACK ScrollBarSubclassProc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+void PaintControlFrame(HWND hwnd, bool losingFocus = false);
+
+// Keep the native combo list for selection/keyboard/accessibility, and give
+// its scrolling gutter a real child SCROLLBAR using the shared theme adapter.
+// The combo is created without WS_VSCROLL so Windows cannot draw a second,
+// system-colored non-client scrollbar during its tracking loop.
+struct DropdownScroll
+{
+    HWND list = nullptr, bar = nullptr, combo = nullptr;
+    bool closing = false, syncing = false;
+};
+void SyncDropdownScroll(DropdownScroll& state)
+{
+    if (state.syncing || !state.bar) return;
+    state.syncing = true;
+    RECT client{}; GetClientRect(state.list, &client);
+    const int count = std::max(0, static_cast<int>(SendMessageW(state.list, LB_GETCOUNT, 0, 0)));
+    const int row = std::max(1, static_cast<int>(SendMessageW(state.list, LB_GETITEMHEIGHT, 0, 0)));
+    SCROLLINFO range{sizeof(range), SIF_RANGE | SIF_PAGE | SIF_POS};
+    range.nMax = std::max(0, count - 1); range.nPage = std::max(1L, client.bottom / row);
+    range.nPos = static_cast<int>(SendMessageW(state.list, LB_GETTOPINDEX, 0, 0));
+    const int width = MulDiv(ThemeManager::ScrollBarWidth, GetDpiForWindow(state.list), 96);
+    RECT before{}; GetWindowRect(state.bar, &before); MapWindowPoints(nullptr, state.list, reinterpret_cast<POINT*>(&before), 2);
+    RECT target{std::max(0L, client.right - width), 0, client.right, client.bottom};
+    if (!EqualRect(&before, &target))
+        SetWindowPos(state.bar, HWND_TOP, target.left, target.top, target.right - target.left, target.bottom,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    const bool show = count > static_cast<int>(range.nPage);
+    if (((GetWindowLongPtrW(state.bar, GWL_STYLE) & WS_VISIBLE) != 0) != show)
+        ShowWindow(state.bar, show ? SW_SHOWNOACTIVATE : SW_HIDE);
+    SCROLLINFO old{sizeof(old), SIF_RANGE | SIF_PAGE | SIF_POS}; GetScrollInfo(state.bar, SB_CTL, &old);
+    if (range.nMax != old.nMax || range.nPage != old.nPage || range.nPos != old.nPos)
+        SetScrollInfo(state.bar, SB_CTL, &range, TRUE);
+    state.syncing = false;
+}
+LRESULT CALLBACK DropdownBarProc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR data)
+{
+    auto& state = *reinterpret_cast<DropdownScroll*>(data);
+    if (message == WM_CANCELMODE) state.closing = true;
+    const auto result = DefSubclassProc(hwnd, message, w, l);
+    if (!IsWindow(hwnd)) return result;
+    if (message == WM_LBUTTONUP || message == WM_CANCELMODE || message == WM_CAPTURECHANGED)
+    {
+        PaintControlFrame(state.list);
+    }
+    // Restore only after the native tracking loop returns, never from
+    // WM_CAPTURECHANGED (which would cancel its final position notification).
+    if ((message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) && !state.closing &&
+        IsWindowVisible(state.list) && !GetCapture() && GetActiveWindow() == GetAncestor(state.combo, GA_ROOT) &&
+        SendMessageW(state.combo, CB_GETDROPPEDSTATE, 0, 0)) SetCapture(state.list);
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(hwnd, DropdownBarProc, id);
+    return result;
+}
+LRESULT CALLBACK DropdownListProc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR data)
+{
+    auto& state = *reinterpret_cast<DropdownScroll*>(data);
+    if (message == WM_SHOWWINDOW || message == WM_WINDOWPOSCHANGING)
+    {
+        const UINT flags = message == WM_SHOWWINDOW ? (w ? SWP_SHOWWINDOW : SWP_HIDEWINDOW) :
+            reinterpret_cast<WINDOWPOS*>(l)->flags;
+        if (flags & SWP_SHOWWINDOW) state.closing = false;
+        if (flags & SWP_HIDEWINDOW)
+        {
+            state.closing = true;
+            if (GetCapture() == state.bar || GetCapture() == hwnd) ReleaseCapture();
+        }
+    }
+    if (message == WM_CTLCOLORSCROLLBAR && reinterpret_cast<HWND>(l) == state.bar)
+        return reinterpret_cast<LRESULT>(HandleCtlColor(hwnd, reinterpret_cast<HDC>(w), state.bar));
+    if (message == WM_CAPTURECHANGED && reinterpret_cast<HWND>(l) == state.bar) return 0;
+    if (message == WM_VSCROLL && reinterpret_cast<HWND>(l) == state.bar)
+    {
+        SCROLLINFO range{sizeof(range), SIF_ALL}; GetScrollInfo(state.bar, SB_CTL, &range);
+        int next = static_cast<int>(SendMessageW(hwnd, LB_GETTOPINDEX, 0, 0));
+        switch (LOWORD(w))
+        {
+        case SB_LINEUP: --next; break; case SB_LINEDOWN: ++next; break;
+        case SB_PAGEUP: next -= range.nPage; break; case SB_PAGEDOWN: next += range.nPage; break;
+        case SB_THUMBTRACK: case SB_THUMBPOSITION: next = range.nTrackPos; break;
+        case SB_TOP: next = range.nMin; break; case SB_BOTTOM: next = range.nMax; break;
+        default: PaintControlFrame(hwnd); return 0;
+        }
+        next = std::clamp(next, range.nMin, std::max(range.nMin, range.nMax - static_cast<int>(range.nPage) + 1));
+        DefSubclassProc(hwnd, LB_SETTOPINDEX, next, 0);
+        SyncDropdownScroll(state);
+        RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        return 0;
+    }
+    if (message == WM_MOUSEMOVE && GetCapture() == hwnd)
+    {
+        POINT point{static_cast<short>(LOWORD(l)), static_cast<short>(HIWORD(l))};
+        ClientToScreen(hwnd, &point);
+        RECT bar{}; GetWindowRect(state.bar, &bar);
+        if (IsWindowVisible(state.bar) && PtInRect(&bar, point))
+        {
+            ScreenToClient(state.bar, &point);
+            return SendMessageW(state.bar, message, w, MAKELPARAM(point.x, point.y));
+        }
+        if (GetPropW(state.bar, L"FFKeyLock.ScrollHot")) SendMessageW(state.bar, WM_MOUSELEAVE, 0, 0);
+    }
+    if (message == WM_LBUTTONDOWN || (message == WM_NCLBUTTONDOWN && w == HTVSCROLL))
+    {
+        POINT point{static_cast<short>(LOWORD(l)), static_cast<short>(HIWORD(l))};
+        if (message == WM_LBUTTONDOWN) ClientToScreen(hwnd, &point);
+        RECT bar{}; GetWindowRect(state.bar, &bar);
+        if (IsWindowVisible(state.bar) && PtInRect(&bar, point))
+        {
+            SyncDropdownScroll(state);
+            RedrawWindow(state.bar, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+            state.closing = false;
+            ScreenToClient(state.bar, &point);
+            SendMessageW(state.bar, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(point.x, point.y));
+            return 0;
+        }
+    }
+    if (message == WM_NCDESTROY)
+    {
+        RemovePropW(hwnd, kDropdownScroll);
+        RemoveWindowSubclass(hwnd, DropdownListProc, id);
+        const auto result = DefSubclassProc(hwnd, message, w, l);
+        delete &state; return result;
+    }
+    const auto result = DefSubclassProc(hwnd, message, w, l);
+    if (message == WM_SIZE || message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW ||
+        message == WM_MOUSEWHEEL || message == WM_KEYDOWN || message == WM_MOUSEMOVE ||
+        message == LB_SETTOPINDEX || message == LB_SETCURSEL || message == LB_RESETCONTENT ||
+        message == LB_ADDSTRING || message == LB_INSERTSTRING || message == LB_DELETESTRING || message == LB_SETITEMHEIGHT)
+        SyncDropdownScroll(state);
+    return result;
+}
+void AdaptDropdownScroll(HWND combo, HWND list)
+{
+    if (GetPropW(list, kDropdownScroll)) return;
+    auto* state = new DropdownScroll{list, nullptr, combo};
+    state->bar = CreateWindowExW(WS_EX_NOACTIVATE, L"SCROLLBAR", L"", WS_CHILD | WS_VISIBLE | SBS_VERT,
+        0, 0, 0, 0, list, nullptr, reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(list, GWLP_HINSTANCE)), nullptr);
+    if (!state->bar) { delete state; return; }
+    SetWindowLongPtrW(list, GWL_STYLE, GetWindowLongPtrW(list, GWL_STYLE) | WS_CLIPCHILDREN);
+    SetWindowTheme(state->bar, L"", L"");
+    SetWindowSubclass(state->bar, ScrollBarSubclassProc, 1, 0);
+    SetWindowSubclass(state->bar, DropdownBarProc, 1, reinterpret_cast<DWORD_PTR>(state));
+    SetPropW(list, kDropdownScroll, state);
+    SetWindowSubclass(list, DropdownListProc, 1, reinterpret_cast<DWORD_PTR>(state));
+    SyncDropdownScroll(*state);
+}
 void PaintButton(HWND hwnd, HDC dc)
 {
     RECT r{}; GetClientRect(hwnd, &r);
@@ -48,7 +196,7 @@ LRESULT CALLBACK ButtonSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM l,
 void PaintLabel(HWND hwnd, HDC target)
 {
     RECT r{}; GetClientRect(hwnd, &r); GdiUtils::BufferedPaint buffer(target, r); HDC dc = buffer.Dc();
-    FillRect(dc, &r, ThemeManager::WindowBrush());
+    FillRect(dc, &r, BackgroundBrush(hwnd));
     std::wstring text(GetWindowTextLengthW(hwnd) + 1, L'\0'); GetWindowTextW(hwnd, text.data(), static_cast<int>(text.size()));
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetPropW(hwnd, L"FFKeyLock.MutedText") ? ThemeManager::MutedTextColor() : ThemeManager::TextColor());
     GdiUtils::SelectObjectScope font(dc, reinterpret_cast<HFONT>(SendMessageW(hwnd, WM_GETFONT, 0, 0)));
@@ -71,8 +219,8 @@ LRESULT CALLBACK LabelSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM l, 
     return result;
 }
 // Native edit and combo-list windows retain their input implementation. Paint
-// their non-client border and (for long dropdowns) native scrollbar as well.
-void PaintControlFrame(HWND hwnd)
+// their non-client border; dropdown scrolling uses the themed child below.
+void PaintControlFrame(HWND hwnd, bool losingFocus)
 {
     HDC target = GetWindowDC(hwnd); if (!target) return;
     RECT window{}, client{}; GetWindowRect(hwnd, &window); GetClientRect(hwnd, &client);
@@ -81,44 +229,33 @@ void PaintControlFrame(HWND hwnd)
     RECT outer{0, 0, window.right - window.left, window.bottom - window.top};
     ExcludeClipRect(target, client.left, client.top, client.right, client.bottom);
     GdiUtils::BufferedPaint buffer(target, outer); HDC dc = buffer.Dc();
-    FillRect(dc, &outer, ThemeManager::SurfaceBrush());
-    HBRUSH border = CreateSolidBrush(GetFocus() == hwnd ? ThemeManager::AccentColor() : ThemeManager::BorderColor());
-    FrameRect(dc, &outer, border); DeleteObject(border);
-    SCROLLBARINFO info{sizeof(info)};
-    if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_VSCROLL) && GetScrollBarInfo(hwnd, OBJID_VSCROLL, &info) &&
-        !(info.rgstate[0] & (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_OFFSCREEN)))
-    {
-        RECT bar = info.rcScrollBar; OffsetRect(&bar, -window.left, -window.top);
-        FillRect(dc, &bar, ThemeManager::WindowBrush());
-        auto scale = [hwnd](int n) { return MulDiv(n, GetDpiForWindow(hwnd), 96); };
-        if (info.xyThumbBottom > info.xyThumbTop)
-        {
-            RECT thumb{bar.left + scale(4), bar.top + info.xyThumbTop, bar.right - scale(4), bar.top + info.xyThumbBottom};
-            GdiUtils::FillRoundRect(dc, thumb, ThemeManager::MutedTextColor(), ThemeManager::MutedTextColor(), scale(5));
-        }
-        HPEN pen = CreatePen(PS_SOLID, std::max(1, scale(1)), ThemeManager::MutedTextColor());
-        {
-            GdiUtils::SelectObjectScope selected(dc, pen);
-            const int x = (bar.left + bar.right) / 2, top = bar.top + info.dxyLineButton / 2, bottom = bar.bottom - info.dxyLineButton / 2;
-            POINT up[] = {{x - scale(3), top + scale(2)}, {x, top - scale(1)}, {x + scale(3), top + scale(2)}};
-            POINT down[] = {{x - scale(3), bottom - scale(2)}, {x, bottom + scale(1)}, {x + scale(3), bottom - scale(2)}};
-            Polyline(dc, up, 3); Polyline(dc, down, 3);
-        }
-        DeleteObject(pen);
-    }
+    FillRect(dc, &outer, BackgroundBrush(GetParent(hwnd)));
+    const bool edit = GetPropW(hwnd, L"FFKeyLock.RoundedEdit") != nullptr;
+    GdiUtils::FillRoundRect(dc, outer, ThemeManager::SurfaceColor(),
+        !losingFocus && GetFocus() == hwnd ? ThemeManager::AccentColor() : ThemeManager::BorderColor(),
+        edit ? MulDiv(ThemeManager::ControlRadius * 2, GetDpiForWindow(hwnd), 96) : 0);
     buffer.Present(); ReleaseDC(hwnd, target);
 }
 LRESULT CALLBACK FrameSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR)
 {
+    if (message == WM_NCCALCSIZE && GetPropW(hwnd, L"FFKeyLock.RoundedEdit"))
+    {
+        const LRESULT result = DefSubclassProc(hwnd, message, w, l);
+        RECT& client = w ? reinterpret_cast<NCCALCSIZE_PARAMS*>(l)->rgrc[0] : *reinterpret_cast<RECT*>(l);
+        const int inset = MulDiv(4, GetDpiForWindow(hwnd), 96);
+        InflateRect(&client, -std::min(inset, static_cast<int>(client.right - client.left) / 2),
+            -std::min(inset, static_cast<int>(client.bottom - client.top) / 2));
+        return result;
+    }
     if (message == WM_NCPAINT) { PaintControlFrame(hwnd); return 0; }
     if (message == WM_NCMOUSEMOVE && w == HTVSCROLL && GetCapture() != hwnd) return 0;
-    if (message == WM_NCDESTROY) RemoveWindowSubclass(hwnd, FrameSubclassProc, id);
+    if (message == WM_NCDESTROY) { RemovePropW(hwnd, L"FFKeyLock.RoundedEdit"); RemoveWindowSubclass(hwnd, FrameSubclassProc, id); }
     const LRESULT result = DefSubclassProc(hwnd, message, w, l);
     if (message == WM_PAINT || message == WM_VSCROLL || message == WM_NCLBUTTONDOWN || message == WM_NCMOUSEMOVE ||
         message == WM_MOUSEWHEEL || message == WM_SETFOCUS || message == WM_KILLFOCUS ||
         message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW || message == WM_MOUSEMOVE ||
         message == WM_KEYDOWN || message == LB_SETTOPINDEX || message == LB_SETCURSEL)
-        PaintControlFrame(hwnd);
+        PaintControlFrame(hwnd, message == WM_KILLFOCUS);
     return result;
 }
 // Keep the native combo box for keyboard, popup and accessibility behavior;
@@ -132,8 +269,8 @@ void PaintCombo(HWND hwnd, HDC target)
     const bool focused = GetFocus() == hwnd;
     const int dpi = GetDpiForWindow(hwnd);
     auto scale = [dpi](int n) { return MulDiv(n, dpi, 96); };
-    FillRect(dc, &r, ThemeManager::WindowBrush());
-    GdiUtils::FillRoundRect(dc, r, ThemeManager::SurfaceColor(), focused ? ThemeManager::AccentColor() : ThemeManager::BorderColor(), scale(6));
+    FillRect(dc, &r, BackgroundBrush(hwnd));
+    GdiUtils::FillRoundRect(dc, r, ThemeManager::SurfaceColor(), focused ? ThemeManager::AccentColor() : ThemeManager::BorderColor(), scale(ThemeManager::ControlRadius * 2));
     wchar_t text[256]{}; GetWindowTextW(hwnd, text, static_cast<int>(std::size(text)));
     RECT label = r; label.left += scale(10); label.right -= scale(28);
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, enabled ? ThemeManager::TextColor() : ThemeManager::DisabledTextColor());
@@ -167,7 +304,11 @@ LRESULT CALLBACK ComboSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM l, 
         message == WM_SYSKEYDOWN || message == WM_CHAR || message == WM_MOUSEWHEEL || message == CB_SETCURSEL)
     {
         COMBOBOXINFO info{sizeof(info)};
-        if (GetComboBoxInfo(hwnd, &info) && IsWindowVisible(info.hwndList)) PaintControlFrame(info.hwndList);
+        if (GetComboBoxInfo(hwnd, &info) && IsWindowVisible(info.hwndList))
+        {
+            if (auto* scroll = static_cast<DropdownScroll*>(GetPropW(info.hwndList, kDropdownScroll))) SyncDropdownScroll(*scroll);
+            PaintControlFrame(info.hwndList);
+        }
     }
     return result;
 }
@@ -178,7 +319,12 @@ void PaintScrollBar(HWND hwnd, HDC target)
 {
     RECT r{}; GetClientRect(hwnd, &r);
     GdiUtils::BufferedPaint buffer(target, r); HDC dc = buffer.Dc();
-    FillRect(dc, &r, ThemeManager::WindowBrush());
+    // Let the native renderer calculate its hit-test/accessibility geometry in
+    // the back buffer before replacing its pixels with the theme.
+    SetPropW(hwnd, L"FFKeyLock.ScrollMeasure", reinterpret_cast<HANDLE>(1));
+    DefSubclassProc(hwnd, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+    RemovePropW(hwnd, L"FFKeyLock.ScrollMeasure");
+    FillRect(dc, &r, GetPropW(GetParent(hwnd), kDropdownScroll) ? ThemeManager::SurfaceBrush() : BackgroundBrush(hwnd));
     SCROLLBARINFO info{sizeof(info)};
     if (GetScrollBarInfo(hwnd, OBJID_CLIENT, &info))
     {
@@ -190,8 +336,8 @@ void PaintScrollBar(HWND hwnd, HDC target)
         if (enabled && info.xyThumbBottom > info.xyThumbTop)
         {
             RECT thumb{inset, info.xyThumbTop, r.right - inset, info.xyThumbBottom};
-            const COLORREF color = GetCapture() == hwnd ? ThemeManager::AccentColor() : ThemeManager::MutedTextColor();
-            GdiUtils::FillRoundRect(dc, thumb, color, color, scale(5));
+            const COLORREF color = ThemeManager::ScrollThumbColor(GetPropW(hwnd, L"FFKeyLock.ScrollHot") != nullptr, GetCapture() == hwnd);
+            GdiUtils::FillRoundRect(dc, thumb, color, color, thumb.right - thumb.left);
         }
         HPEN pen = CreatePen(PS_SOLID, std::max(1, scale(1)), enabled ? ThemeManager::MutedTextColor() : ThemeManager::DisabledTextColor());
         {
@@ -203,10 +349,63 @@ void PaintScrollBar(HWND hwnd, HDC target)
         }
         DeleteObject(pen);
     }
+    if (GetFocus() == hwnd && !(SendMessageW(hwnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS))
+    { InflateRect(&r, -1, -1); DrawFocusRect(dc, &r); }
     buffer.Present();
 }
+int ScrollBarPart(HWND hwnd, POINT point)
+{
+    RECT client{}; GetClientRect(hwnd, &client);
+    if (!PtInRect(&client, point)) return -1;
+    SCROLLBARINFO geometry{sizeof(geometry)};
+    if (!GetScrollBarInfo(hwnd, OBJID_CLIENT, &geometry)) return -1;
+    if (point.y < geometry.dxyLineButton) return SB_LINEUP;
+    if (point.y >= client.bottom - geometry.dxyLineButton) return SB_LINEDOWN;
+    if (point.y < geometry.xyThumbTop) return SB_PAGEUP;
+    if (point.y >= geometry.xyThumbBottom) return SB_PAGEDOWN;
+    return -1;
+}
+constexpr UINT_PTR kScrollRepeat = 0x4646;
 LRESULT CALLBACK ScrollBarSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR)
 {
+    // Classic arrow buttons paint directly without WM_CTLCOLORSCROLLBAR.
+    // Handle their press/repeat (and page track) here; the native control still
+    // owns thumb dragging, keyboard input, range and accessibility geometry.
+    if (message == WM_LBUTTONDOWN)
+    {
+        POINT point{static_cast<short>(LOWORD(l)), static_cast<short>(HIWORD(l))};
+        const int part = ScrollBarPart(hwnd, point);
+        if (part >= 0 && IsWindowEnabled(hwnd))
+        {
+            if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_TABSTOP) SetFocus(hwnd);
+            SetPropW(hwnd, L"FFKeyLock.ScrollPress", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(part + 1)));
+            SetCapture(hwnd);
+            SetTimer(hwnd, kScrollRepeat, 350, nullptr);
+            SendMessageW(GetParent(hwnd), WM_VSCROLL, part, reinterpret_cast<LPARAM>(hwnd));
+            RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+            return 0;
+        }
+    }
+    if (message == WM_TIMER && w == kScrollRepeat)
+    {
+        const auto press = reinterpret_cast<INT_PTR>(GetPropW(hwnd, L"FFKeyLock.ScrollPress"));
+        POINT point{}; GetCursorPos(&point); ScreenToClient(hwnd, &point);
+        if (press && GetCapture() == hwnd && ScrollBarPart(hwnd, point) == press - 1)
+            SendMessageW(GetParent(hwnd), WM_VSCROLL, press - 1, reinterpret_cast<LPARAM>(hwnd));
+        SetTimer(hwnd, kScrollRepeat, 60, nullptr);
+        return 0;
+    }
+    if (message == WM_LBUTTONUP || message == WM_CANCELMODE || message == WM_CAPTURECHANGED || message == WM_NCDESTROY)
+    {
+        if (RemovePropW(hwnd, L"FFKeyLock.ScrollPress"))
+        {
+            KillTimer(hwnd, kScrollRepeat);
+            if (GetCapture() == hwnd) ReleaseCapture();
+            SendMessageW(GetParent(hwnd), WM_VSCROLL, SB_ENDSCROLL, reinterpret_cast<LPARAM>(hwnd));
+            RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+            if (message == WM_LBUTTONUP) return 0;
+        }
+    }
     if (message == WM_PAINT)
     {
         PAINTSTRUCT ps{}; HDC dc = BeginPaint(hwnd, &ps); PaintScrollBar(hwnd, dc); EndPaint(hwnd, &ps); return 0;
@@ -215,9 +414,22 @@ LRESULT CALLBACK ScrollBarSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM
     if (message == WM_ERASEBKGND) return TRUE;
     if (message == WM_MOUSEWHEEL) return SendMessageW(GetParent(hwnd), message, w, l);
     // The native class paints hover directly to a window DC, bypassing WM_PAINT.
-    // Our appearance has no separate hover state. Keep its drag/capture path,
-    // but do not start the native hover renderer on ordinary pointer movement.
-    if ((message == WM_MOUSEMOVE && GetCapture() != hwnd) || message == WM_MOUSELEAVE) return 0;
+    // Keep native drag/capture semantics; ordinary hover belongs to our theme.
+    if (message == WM_MOUSEMOVE)
+    {
+        if (!GetPropW(hwnd, L"FFKeyLock.ScrollHot"))
+        {
+            SetPropW(hwnd, L"FFKeyLock.ScrollHot", reinterpret_cast<HANDLE>(1));
+            TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0}; TrackMouseEvent(&track);
+            RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        }
+        if (GetCapture() != hwnd || GetPropW(hwnd, L"FFKeyLock.ScrollPress")) return 0;
+    }
+    if (message == WM_MOUSELEAVE)
+    {
+        RemovePropW(hwnd, L"FFKeyLock.ScrollHot");
+        RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW); return 0;
+    }
     if (message == SBM_SETSCROLLINFO || message == SBM_SETPOS || message == SBM_SETRANGEREDRAW)
     {
         const LRESULT result = message == SBM_SETSCROLLINFO ? DefSubclassProc(hwnd, message, FALSE, l) :
@@ -227,10 +439,11 @@ LRESULT CALLBACK ScrollBarSubclassProc(HWND hwnd, UINT message, WPARAM w, LPARAM
         RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
         return result;
     }
-    if (message == WM_NCDESTROY) RemoveWindowSubclass(hwnd, ScrollBarSubclassProc, id);
+    if (message == WM_NCDESTROY) { RemovePropW(hwnd, L"FFKeyLock.ScrollHot"); RemoveWindowSubclass(hwnd, ScrollBarSubclassProc, id); }
     const LRESULT result = DefSubclassProc(hwnd, message, w, l);
     if (message == WM_ENABLE || message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN ||
-        message == WM_LBUTTONUP || message == WM_CAPTURECHANGED)
+        message == WM_LBUTTONUP || message == WM_CAPTURECHANGED || message == WM_KEYDOWN ||
+        message == WM_KEYUP || message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_UPDATEUISTATE)
         RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     return result;
 }
@@ -260,6 +473,7 @@ void ApplyControlTheme(HWND hwnd)
         {
             SetWindowTheme(info.hwndList, L"", L"");
             SetWindowSubclass(info.hwndList, FrameSubclassProc, 1, 0);
+            AdaptDropdownScroll(hwnd, info.hwndList);
             RedrawWindow(info.hwndList, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME);
         }
         SendMessageW(hwnd, CB_SETMINVISIBLE, 8, 0);
@@ -268,7 +482,12 @@ void ApplyControlTheme(HWND hwnd)
     }
     else if (_wcsicmp(type, L"Edit") == 0)
     {
-        SetWindowTheme(hwnd, L"", L""); SetWindowSubclass(hwnd, FrameSubclassProc, 1, 0);
+        SetWindowTheme(hwnd, L"", L"");
+        // Create edits without WS_BORDER: the native class caches that flag
+        // and can paint a second square frame even after removing the style.
+        SetPropW(hwnd, L"FFKeyLock.RoundedEdit", reinterpret_cast<HANDLE>(1));
+        SetWindowSubclass(hwnd, FrameSubclassProc, 1, 0);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME);
     }
     else if (_wcsicmp(type, L"ListBox") == 0) SetWindowTheme(hwnd, L"", L"");
@@ -299,11 +518,26 @@ HBRUSH HandleCtlColor(HWND, HDC hdc, HWND control)
 {
     wchar_t type[32]{};
     GetClassNameW(control, type, 32);
-    const bool label = _wcsicmp(type, L"Static") == 0 || _wcsicmp(type, L"Button") == 0 || _wcsicmp(type, L"ListBox") == 0;
+    DWORD_PTR adapter = 0;
+    if (_wcsicmp(type, L"ScrollBar") == 0 && GetWindowSubclass(control, ScrollBarSubclassProc, 1, &adapter) &&
+        !GetPropW(control, L"FFKeyLock.ScrollMeasure"))
+    {
+        // Classic SCROLLBAR also draws directly inside its native tracking
+        // loop. Supply the themed frame before that draw and exclude its
+        // system pixels from this DC, just as we do for native menu arrows.
+        // Clear only the explicit clip from the previous use of the DC; the
+        // window's system visibility/child clipping remains in force.
+        SelectClipRgn(hdc, nullptr);
+        SendMessageW(control, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(hdc), PRF_CLIENT);
+        RECT client{}; GetClientRect(control, &client);
+        ExcludeClipRect(hdc, client.left, client.top, client.right, client.bottom);
+    }
+    const bool label = _wcsicmp(type, L"Static") == 0 || _wcsicmp(type, L"Button") == 0 || _wcsicmp(type, L"ListBox") == 0 || _wcsicmp(type, L"ScrollBar") == 0;
     SetBkMode(hdc, OPAQUE);
-    SetBkColor(hdc, label ? ThemeManager::WindowColor() : ThemeManager::SurfaceColor());
+    const bool dropdownBar = _wcsicmp(type, L"ScrollBar") == 0 && GetPropW(GetParent(control), kDropdownScroll);
+    SetBkColor(hdc, label && !dropdownBar ? BackgroundColor(control) : ThemeManager::SurfaceColor());
     SetTextColor(hdc, !IsWindowEnabled(control) ? ThemeManager::DisabledTextColor() : GetPropW(control, L"FFKeyLock.MutedText") ? ThemeManager::MutedTextColor() : ThemeManager::TextColor());
-    return label ? ThemeManager::WindowBrush() : ThemeManager::SurfaceBrush();
+    return label && !dropdownBar ? BackgroundBrush(control) : ThemeManager::SurfaceBrush();
 }
 
 bool DrawCheckBox(const NMCUSTOMDRAW& item, LRESULT& result)
@@ -324,7 +558,7 @@ bool DrawCheckBox(const NMCUSTOMDRAW& item, LRESULT& result)
     auto scale = [hwnd](int n) { return MulDiv(n, GetDpiForWindow(hwnd), 96); };
     RECT r = item.rc;
     GdiUtils::BufferedPaint buffer(item.hdc, r); HDC dc = buffer.Dc();
-    FillRect(dc, &r, ThemeManager::WindowBrush());
+    FillRect(dc, &r, BackgroundBrush(hwnd));
     SetBkMode(dc, TRANSPARENT);
     const COLORREF ink = !enabled ? ThemeManager::DisabledTextColor() : checked && key && ThemeManager::HighContrast() ? GetSysColor(COLOR_HIGHLIGHTTEXT) : ThemeManager::TextColor();
     SetTextColor(dc, ink);
@@ -332,7 +566,7 @@ bool DrawCheckBox(const NMCUSTOMDRAW& item, LRESULT& result)
     if (key)
     {
         const COLORREF fill = checked ? ThemeManager::SelectionColor() : pressed ? ThemeManager::ButtonPressedColor() : hot ? ThemeManager::ButtonHotColor() : ThemeManager::ButtonColor();
-        GdiUtils::FillRoundRect(dc, r, fill, checked || hot ? ThemeManager::AccentColor() : ThemeManager::BorderColor(), scale(5));
+        GdiUtils::FillRoundRect(dc, r, fill, checked || hot ? ThemeManager::AccentColor() : ThemeManager::BorderColor(), scale(ThemeManager::ControlRadius * 2));
         // An underline distinguishes selected keys without relying on color alone.
         if (checked)
         {
@@ -388,12 +622,12 @@ void DrawButton(const DRAWITEMSTRUCT& item)
     }
 
     RECT rect = item.rcItem;
-    HBRUSH background = CreateSolidBrush(ThemeManager::WindowColor());
+    HBRUSH background = CreateSolidBrush(BackgroundColor(item.hwndItem));
     FillRect(hdc, &rect, background);
     DeleteObject(background);
     const bool flat = GetPropW(item.hwndItem, L"FFKeyLock.FlatButton") != nullptr;
-    if (flat && !hot && !pressed) fill = ThemeManager::WindowColor();
-    DrawRoundRect(hdc, rect, fill, flat ? fill : hot && !disabled ? ThemeManager::AccentColor() : ThemeManager::BorderColor(), scale(7));
+    if (flat && !hot && !pressed) fill = BackgroundColor(item.hwndItem);
+    DrawRoundRect(hdc, rect, fill, flat ? fill : hot && !disabled ? ThemeManager::AccentColor() : ThemeManager::BorderColor(), scale(ThemeManager::ControlRadius * 2));
 
     wchar_t text[256]{};
     GetWindowTextW(item.hwndItem, text, static_cast<int>(std::size(text)));

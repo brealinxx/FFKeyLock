@@ -19,6 +19,65 @@ namespace
 {
 int checks = 0;
 void Check(bool okay, const char* reason) { ++checks; if (!okay) throw std::runtime_error(reason); }
+// Keep incidental hover out of screenshot comparisons. Nested drag tests
+// return here; restore the user's location when the harness finishes.
+class TestCursor
+{
+public:
+    explicit TestCursor(POINT neutral) : neutral_(neutral)
+    { GetCursorPos(&saved_); SetCursorPos(neutral.x, neutral.y); }
+    ~TestCursor()
+    {
+        POINT current{}; GetCursorPos(&current);
+        if (current.x == neutral_.x && current.y == neutral_.y) SetCursorPos(saved_.x, saved_.y);
+    }
+private:
+    POINT saved_{}, neutral_{};
+};
+// Model button state in this thread and keep the real cursor coordinates in
+// sync: native tracking reads the cursor again on release. No button input is
+// injected globally; restore the cursor unless the user moved it independently.
+class ThreadMousePress
+{
+public:
+    explicit ThreadMousePress(POINT start)
+    {
+        GetCursorPos(&savedCursor_); Move(start);
+        GetKeyboardState(saved_); held_ = true;
+        hook_ = SetWindowsHookExW(WH_CALLWNDPROC, Observe, nullptr, GetCurrentThreadId());
+        if (!hook_) { held_ = false; SetCursorPos(savedCursor_.x, savedCursor_.y); throw std::runtime_error("Cannot observe test-thread mouse messages"); }
+        Update();
+    }
+    ~ThreadMousePress()
+    {
+        UnhookWindowsHookEx(hook_); held_ = false; SetKeyboardState(saved_);
+        POINT current{}; GetCursorPos(&current);
+        if (current.x == expectedCursor_.x && current.y == expectedCursor_.y) SetCursorPos(savedCursor_.x, savedCursor_.y);
+    }
+    static void Move(POINT point) { expectedCursor_ = point; SetCursorPos(point.x, point.y); }
+private:
+    BYTE saved_[256]{};
+    POINT savedCursor_{};
+    static inline POINT expectedCursor_{};
+    HHOOK hook_ = nullptr;
+    static inline bool held_ = false;
+    static void Update()
+    {
+        BYTE keys[256]{}; GetKeyboardState(keys);
+        keys[VK_LBUTTON] = (keys[VK_LBUTTON] & 0x7f) | (held_ ? 0x80 : 0);
+        SetKeyboardState(keys);
+    }
+    static LRESULT CALLBACK Observe(int code, WPARAM w, LPARAM l)
+    {
+        if (code >= 0)
+        {
+            const auto message = reinterpret_cast<CWPSTRUCT*>(l)->message;
+            if (message == WM_LBUTTONUP) { held_ = false; Update(); }
+            else if (held_) Update();
+        }
+        return CallNextHookEx(nullptr, code, w, l);
+    }
+};
 struct Frame
 {
     int width = 0, height = 0;
@@ -46,7 +105,23 @@ void Save(const Frame& frame, const std::filesystem::path& path)
     std::ofstream file(path, std::ios::binary); file.write(reinterpret_cast<char*>(&header), sizeof(header));
     file.write(reinterpret_cast<char*>(&info), sizeof(info)); file.write(reinterpret_cast<const char*>(frame.pixels.data()), frame.pixels.size() * sizeof(DWORD));
 }
-struct Harness { MainContentView view; UI::MenuBar menu; HWND window = nullptr; int popupChecks = 0; bool popupDark = false; bool replaceMenu = false; HMENU arrowMenu = nullptr; std::vector<int> arrowGroups; bool arrowHighlighted = false; std::filesystem::path directory; };
+HWND DropdownBar(HWND list)
+{
+    const HWND child = FindWindowExW(list, nullptr, L"SCROLLBAR", nullptr);
+    return child && IsWindowVisible(child) ? child : list;
+}
+bool DropdownGeometry(HWND list, SCROLLBARINFO& geometry)
+{
+    const HWND bar = DropdownBar(list);
+    return GetScrollBarInfo(bar, bar == list ? OBJID_VSCROLL : OBJID_CLIENT, &geometry) != FALSE;
+}
+void RepaintDropdownFrame(HWND list)
+{
+    SendMessageW(list, WM_NCPAINT, 1, 0);
+    const HWND bar = DropdownBar(list);
+    if (bar != list) RedrawWindow(bar, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+}
+struct Harness { MainContentView view; UI::MenuBar menu; HWND window = nullptr; int popupChecks = 0; bool popupDark = false; bool replaceMenu = false; HWND dragBar = nullptr; int dragStep = 0; LPARAM dragPoint = 0; bool dragThemed = true; bool dragCaptured = false; bool dragContrast = true; HWND dropdownDrag = nullptr; int dropdownStep = 0; int dropdownTicks = 2; LPARAM dropdownPoint = 0; bool dropdownThemed = true; bool dropdownCaptured = false; HMENU arrowMenu = nullptr; std::vector<int> arrowGroups; bool arrowHighlighted = false; std::filesystem::path directory; };
 void Pump(Harness& state)
 {
     // Mouse enter/leave messages after moving children arrive asynchronously.
@@ -84,6 +159,54 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM w, LPARAM l)
     }
     case WM_TIMER:
     {
+        if (w == 3 && state->dropdownDrag)
+        {
+            HWND list = state->dropdownDrag;
+            const auto before = Capture(list, true);
+            const HWND capture = GetCapture();
+            state->dropdownCaptured |= capture == list || IsChild(list, capture);
+            RepaintDropdownFrame(list);
+            const auto after = Capture(list, true);
+            state->dropdownThemed &= before.pixels == after.pixels;
+            if (before.pixels != after.pixels)
+            { Save(before, state->directory / L"dropdown-drag-native.bmp"); Save(after, state->directory / L"dropdown-drag-themed.bmp"); }
+            POINT point{static_cast<short>(LOWORD(state->dropdownPoint)), static_cast<short>(HIWORD(state->dropdownPoint))};
+            ClientToScreen(list, &point);
+            ThreadMousePress::Move(point);
+            if (capture) ScreenToClient(capture, &point);
+            const LPARAM location = MAKELPARAM(point.x, point.y);
+            ++state->dropdownStep;
+            if (state->dropdownStep == 1)
+                PostMessageW(capture ? capture : list, WM_MOUSEMOVE, MK_LBUTTON, location);
+            if (state->dropdownStep == state->dropdownTicks)
+            { PostMessageW(capture ? capture : list, WM_LBUTTONUP, 0, location); KillTimer(hwnd, 3); }
+            return 0;
+        }
+        if (w == 2 && state->dragBar)
+        {
+            const auto frame = Capture(state->dragBar);
+            state->dragCaptured |= GetCapture() == state->dragBar;
+            SCROLLBARINFO geometry{sizeof(geometry)}; GetScrollBarInfo(state->dragBar, OBJID_CLIENT, &geometry);
+            state->dragContrast &= frame.Pixel(frame.width / 2, (geometry.xyThumbTop + geometry.xyThumbBottom) / 2) ==
+                ThemeManager::ScrollThumbColor(false, true);
+            RedrawWindow(state->dragBar, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+            const auto themed = Capture(state->dragBar);
+            state->dragThemed &= frame.pixels == themed.pixels;
+            if (frame.pixels != themed.pixels)
+            {
+                Save(frame, state->directory / L"drag-transient.bmp");
+                Save(themed, state->directory / L"drag-repaint.bmp");
+            }
+            POINT cursor{static_cast<short>(LOWORD(state->dragPoint)), static_cast<short>(HIWORD(state->dragPoint))};
+            ClientToScreen(state->dragBar, &cursor); ThreadMousePress::Move(cursor);
+            if (state->dragStep++ == 0) PostMessageW(state->dragBar, WM_MOUSEMOVE, MK_LBUTTON, state->dragPoint);
+            else
+            {
+                PostMessageW(state->dragBar, WM_LBUTTONUP, 0, state->dragPoint);
+                KillTimer(hwnd, 2);
+            }
+            return 0;
+        }
         // TrackPopupMenu's native modal loop dispatches this timer. Inspect only
         // menu windows owned by this test process, then close through EndMenu.
         HWND popup = nullptr;
@@ -193,6 +316,138 @@ void CheckScrollbarTransient(Harness& state, HWND bar, const std::wstring& name)
     }
 }
 
+void CheckPanel(HWND panel)
+{
+    const auto frame = Capture(panel);
+    for (auto point : {POINT{0, 0}, POINT{frame.width - 1, 0}, POINT{0, frame.height - 1}, POINT{frame.width - 1, frame.height - 1}})
+        Check(frame.Pixel(point.x, point.y) == ThemeManager::WindowColor(), "Panel corner belongs to the page background");
+    Check(frame.Pixel(frame.width / 2, 0) == ThemeManager::PanelBorderColor(), "Panel has a subtle top border");
+    Check(frame.Pixel(frame.width / 2, frame.height - 3) == ThemeManager::SurfaceColor(), "Panel bottom padding has the surface color");
+    const auto inner = UI::PanelInterior(panel);
+    Check(frame.Pixel(frame.width - 3, inner.bottom - 1) == ThemeManager::SurfaceColor(), "Scrollbar bottom gutter has no white corner");
+}
+void CheckScrollbarInteraction(Harness& state, HWND bar)
+{
+    HWND panel = GetParent(bar);
+    SendMessageW(panel, WM_VSCROLL, SB_TOP, reinterpret_cast<LPARAM>(bar));
+    SetFocus(nullptr);
+    SendMessageW(bar, WM_MOUSELEAVE, 0, 0); Pump(state);
+    SCROLLBARINFO geometry{sizeof(geometry)};
+    Check(GetScrollBarInfo(bar, OBJID_CLIENT, &geometry) && geometry.xyThumbBottom > geometry.xyThumbTop,
+        "Native scrollbar exposes nonempty thumb geometry");
+    RECT r{}; GetClientRect(bar, &r);
+    const int x = r.right / 2, y = (geometry.xyThumbTop + geometry.xyThumbBottom) / 2;
+    const auto normal = Capture(bar);
+    Check(normal.Pixel(x, y) == ThemeManager::ScrollThumbColor(false, false), "Scrollbar idle thumb uses the neutral theme color");
+    Check(normal.Pixel(0, y) == ThemeManager::SurfaceColor(), "Scrollbar track matches its panel");
+    SendMessageW(bar, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+    const auto hot = Capture(bar);
+    Check(hot.Pixel(x, y) == ThemeManager::ScrollThumbColor(true, false) && hot.Pixel(x, y) != normal.Pixel(x, y), "Scrollbar hover increases contrast immediately");
+    // Focus changes can reset this thread's simulated mouse-button state.
+    // Complete activation/focus before setting it for the native press.
+    SetActiveWindow(state.window); SetFocus(bar); Pump(state);
+    Check(GetFocus() == bar, "Scrollbar is focused before simulating its native mouse press");
+    state.dragBar = bar; state.dragStep = 0; state.dragThemed = true; state.dragCaptured = false; state.dragContrast = true;
+    state.dragPoint = MAKELPARAM(x, std::min(static_cast<int>(r.bottom) - geometry.dxyLineButton - 2, y + 70));
+    SetTimer(state.window, 2, 80, nullptr);
+    {
+        POINT cursor{x, y}; ClientToScreen(bar, &cursor);
+        ThreadMousePress buttonState(cursor);
+        SendMessageW(bar, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x, y));
+        const auto deadline = GetTickCount64() + 2000;
+        while (state.dragStep < 2 && GetTickCount64() < deadline) Pump(state);
+        Pump(state);
+    }
+    KillTimer(state.window, 2); state.dragBar = nullptr;
+    // Cursor restoration leaves a delayed native TME_LEAVE notification.
+    // Settle that known test hover before comparing unrelated scroll frames.
+    TRACKMOUSEEVENT leave{sizeof(leave), TME_CANCEL | TME_LEAVE, bar, 0}; TrackMouseEvent(&leave);
+    SendMessageW(bar, WM_MOUSELEAVE, 0, 0);
+    if (!state.dragCaptured || state.dragStep != 2)
+        std::cerr << "Scrollbar capture: samples=" << state.dragStep << " captured=" << state.dragCaptured << " focus=" << GetFocus() << " capture=" << GetCapture() << '\n';
+    Check(state.dragCaptured && state.dragStep == 2, "Native thumb drag captured and released the pointer");
+    Check(GetScrollPos(bar, SB_CTL) > 0, "Native thumb drag actually scrolls the content");
+    Check(state.dragThemed, "Scrollbar keeps themed pixels inside the native drag loop");
+    Check(state.dragContrast, "Captured thumb uses the higher contrast pressed color");
+    Check(GetCapture() != bar, "Scrollbar releases capture after dragging");
+    SetFocus(bar);
+    SendMessageW(bar, WM_KEYDOWN, VK_HOME, 0); SendMessageW(bar, WM_KEYUP, VK_HOME, 0);
+    Check(GetScrollPos(bar, SB_CTL) == 0, "Home scrolls to the top");
+    SendMessageW(bar, WM_KEYDOWN, VK_NEXT, 0); SendMessageW(bar, WM_KEYUP, VK_NEXT, 0);
+    Check(GetScrollPos(bar, SB_CTL) > 0, "Page Down scrolls through the native control");
+    SendMessageW(bar, WM_KEYDOWN, VK_END, 0); SendMessageW(bar, WM_KEYUP, VK_END, 0);
+    SCROLLINFO range{sizeof(range), SIF_ALL}; GetScrollInfo(bar, SB_CTL, &range);
+    Check(range.nPos == range.nMax - static_cast<int>(range.nPage) + 1, "End scrolls to the bottom");
+    SetFocus(nullptr);
+    SendMessageW(panel, WM_VSCROLL, SB_TOP, reinterpret_cast<LPARAM>(bar));
+    Pump(state); CheckPanel(panel);
+}
+
+void CheckDropdownScrolling(Harness& state, HWND combo)
+{
+    SetActiveWindow(state.window); SetFocus(combo);
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+    SendMessageW(combo, CB_SHOWDROPDOWN, TRUE, 0); Pump(state);
+    COMBOBOXINFO keyboard{sizeof(keyboard)}; GetComboBoxInfo(combo, &keyboard);
+    SendMessageW(combo, WM_KEYDOWN, VK_END, 0); SendMessageW(combo, WM_KEYUP, VK_END, 0);
+    const auto keyboardTop = SendMessageW(keyboard.hwndList, LB_GETTOPINDEX, 0, 0);
+    Check(keyboardTop > 0 && GetScrollPos(DropdownBar(keyboard.hwndList), SB_CTL) == keyboardTop,
+        "Dropdown keyboard navigation synchronizes the themed scrollbar");
+    const auto keyFrame = Capture(keyboard.hwndList, true); RepaintDropdownFrame(keyboard.hwndList);
+    Check(keyFrame.pixels == Capture(keyboard.hwndList, true).pixels, "Dropdown keyboard scrolling is immediately themed");
+    SendMessageW(combo, WM_KEYDOWN, VK_ESCAPE, 0); SendMessageW(combo, WM_KEYUP, VK_ESCAPE, 0); Pump(state);
+    Check(!IsWindowVisible(keyboard.hwndList) && GetCapture() != keyboard.hwndList,
+        "Escape closes the keyboard-scrolled dropdown and releases capture");
+    for (int action = 0; action < 3; ++action)
+    {
+        SetActiveWindow(state.window); SetFocus(combo); SendMessageW(combo, CB_SHOWDROPDOWN, TRUE, 0); Pump(state);
+        COMBOBOXINFO info{sizeof(info)}; GetComboBoxInfo(combo, &info);
+        HWND list = info.hwndList;
+        SendMessageW(list, LB_SETTOPINDEX, 0, 0); Pump(state);
+        SCROLLBARINFO geometry{sizeof(geometry)};
+        Check(DropdownGeometry(list, geometry) && geometry.xyThumbBottom > geometry.xyThumbTop,
+            "Dropdown exposes accessible scrollbar geometry");
+        const POINT start{(geometry.rcScrollBar.left + geometry.rcScrollBar.right) / 2,
+            action == 1 ? geometry.rcScrollBar.bottom - geometry.dxyLineButton / 2 : geometry.rcScrollBar.top +
+            (action == 2 ? geometry.xyThumbBottom + 12 : (geometry.xyThumbTop + geometry.xyThumbBottom) / 2)};
+        POINT move{start.x, start.y + (action == 0 ? 60 : 0)}; ScreenToClient(list, &move);
+        state.dropdownDrag = list; state.dropdownStep = 0; state.dropdownThemed = true; state.dropdownCaptured = false;
+        state.dropdownTicks = action == 1 ? 12 : 2;
+        state.dropdownPoint = MAKELPARAM(move.x, move.y);
+        SetTimer(state.window, 3, 80, nullptr);
+        {
+            ThreadMousePress buttonState(start);
+            POINT click = start; ScreenToClient(list, &click);
+            // An open ComboLBox has capture: real gutter clicks arrive as
+            // client mouse messages and must be forwarded to its scrollbar.
+            SendMessageW(list, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(click.x, click.y));
+            const auto deadline = GetTickCount64() + 3000;
+            while (state.dropdownStep < state.dropdownTicks && GetTickCount64() < deadline) Pump(state);
+        }
+        Pump(state);
+        KillTimer(state.window, 3); state.dropdownDrag = nullptr;
+        Check(state.dropdownCaptured && state.dropdownStep == state.dropdownTicks, "Dropdown scrollbar retains native capture while held");
+        const auto top = SendMessageW(list, LB_GETTOPINDEX, 0, 0);
+        Check(top > 0, "Dropdown thumb, held arrow and page track actually scroll items");
+        Check(state.dropdownThemed, "Dropdown stays themed throughout scrollbar tracking");
+        Check(IsWindowVisible(list) && GetCapture() == list, "Scrollbar release returns capture to the open dropdown");
+        const auto frame = Capture(list, true);
+        Save(frame, state.directory / ((ThemeManager::IsDark() ? std::wstring(L"dropdown-dark-") : std::wstring(L"dropdown-light-")) + std::to_wstring(action) + L".bmp"));
+        SendMessageW(list, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)), 0);
+        const auto wheel = Capture(list, true); RepaintDropdownFrame(list);
+        Check(wheel.pixels == Capture(list, true).pixels, "Dropdown wheel scrolling has no native scrollbar frame");
+        // Select a visible item after using the scrollbar. Native list input
+        // must still dismiss the popup and update the closed combo field.
+        const auto selected = SendMessageW(list, LB_GETTOPINDEX, 0, 0) + 1;
+        const int row = static_cast<int>(SendMessageW(list, LB_GETITEMHEIGHT, 0, 0));
+        SendMessageW(list, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(12, row + row / 2));
+        SendMessageW(list, WM_LBUTTONUP, 0, MAKELPARAM(12, row + row / 2)); Pump(state);
+        Check(SendMessageW(combo, CB_GETCURSEL, 0, 0) == selected && !SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0),
+            "Mouse selection after scrolling commits the item and closes the dropdown");
+        Check(GetCapture() != list && !IsChild(list, GetCapture()), "Closing the dropdown releases its capture");
+    }
+}
+
 }
 int wmain(int argc, wchar_t** argv)
 {
@@ -202,6 +457,7 @@ int wmain(int argc, wchar_t** argv)
         Check(argc == 2, "Supply an isolated artifact directory");
         const auto directory = std::filesystem::absolute(argv[1]) / (L"ui-" + std::to_wstring(GetCurrentProcessId()));
         std::filesystem::create_directories(directory); state.directory = directory;
+        std::cout << "UI artifacts: " << directory.string() << std::endl;
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         INITCOMMONCONTROLSEX common{sizeof(common), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES}; InitCommonControlsEx(&common);
         g_hInst = GetModuleHandleW(nullptr); g_notificationsEnabled = g_overlayNotificationsEnabled = false;
@@ -223,16 +479,20 @@ int wmain(int argc, wchar_t** argv)
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, work.left + 20, work.top + 20, width, height, nullptr, nullptr, g_hInst, &state);
         Check(host != nullptr, "Create test window"); ThemeManager::ApplyDarkTitleBar(host);
         ShowWindow(host, SW_SHOWNOACTIVATE); SetWindowPos(host, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        RECT hostBounds{}; GetWindowRect(host, &hostBounds);
+        TestCursor cursor({(hostBounds.left + hostBounds.right) / 2, hostBounds.top + 8});
         UI::InvalidateSurface(host, true); Pump(state);
         HWND editor = FindWindowExW(state.view.Window(), nullptr, L"FFKeyLockProfileEditor", nullptr);
         HWND library = GetDlgItem(state.view.Window(), 4103);
         HWND list = FindWindowExW(library, nullptr, L"LISTBOX", nullptr);
-        HWND content = FindWindowExW(editor, nullptr, L"FFKeyLockScrollContent", nullptr);
+        HWND content = FindWindowExW(FindWindowExW(editor, nullptr, L"FFKeyLockScrollViewport", nullptr), nullptr, L"FFKeyLockScrollContent", nullptr);
         Check(editor && library && list && content, "Find live editor/library controls");
         Check(GetMenu(host) == nullptr, "No system non-client menu background");
         Save(Capture(host), directory / L"dark-start.bmp");
         EqualToFullRepaint(state, directory, L"initial");
         CheckMenuArrows(state);
+        CheckScrollbarInteraction(state, FindWindowExW(editor, nullptr, L"SCROLLBAR", nullptr));
+        CheckScrollbarInteraction(state, FindWindowExW(library, nullptr, L"SCROLLBAR", nullptr));
         CheckScrollbarTransient(state, FindWindowExW(editor, nullptr, L"SCROLLBAR", nullptr), L"editor-dark");
         CheckScrollbarTransient(state, FindWindowExW(library, nullptr, L"SCROLLBAR", nullptr), L"library-dark");
         for (int i = 0; i < 40; ++i)
@@ -251,26 +511,27 @@ int wmain(int argc, wchar_t** argv)
         SendMessageW(editor, WM_VSCROLL, SB_BOTTOM, 0); EqualToFullRepaint(state, directory, L"expanded-bottom");
         SendMessageW(GetDlgItem(content, 2115), BM_CLICK, 0, 0); EqualToFullRepaint(state, directory, L"collapsed-bottom");
         const HWND combo = GetDlgItem(content, 2117);
-        SetFocus(combo); SendMessageW(combo, CB_SHOWDROPDOWN, TRUE, 0); Pump(state);
+        CheckDropdownScrolling(state, combo);
+        SetActiveWindow(state.window); SetFocus(combo); SendMessageW(combo, CB_SHOWDROPDOWN, TRUE, 0); Pump(state);
         COMBOBOXINFO info{sizeof(info)}; GetComboBoxInfo(combo, &info);
         Check(IsWindowVisible(info.hwndList), "Additional keys dropdown opens");
         auto dropdown = Capture(info.hwndList); Save(Capture(info.hwndList, true), directory / L"dropdown.bmp");
         Check(dropdown.Pixel(dropdown.width - 4, dropdown.height - 4) == ThemeManager::SurfaceColor(), "Dropdown background follows dark theme");
         Check(dropdown.height < scale(300), "Long dropdown stays compact");
-        SCROLLBARINFO barInfo{sizeof(barInfo)}; GetScrollBarInfo(info.hwndList, OBJID_VSCROLL, &barInfo);
+        SCROLLBARINFO barInfo{sizeof(barInfo)}; DropdownGeometry(info.hwndList, barInfo);
         RECT bounds{}; GetWindowRect(info.hwndList, &bounds);
-        SendMessageW(info.hwndList, WM_NCMOUSEMOVE, HTVSCROLL,
-            MAKELPARAM(barInfo.rcScrollBar.left + 2, barInfo.rcScrollBar.top + 2));
+        const HWND dropdownBar = DropdownBar(info.hwndList);
+        SendMessageW(dropdownBar, WM_MOUSEMOVE, 0, MAKELPARAM(2, 2));
         const auto hoverFrame = Capture(info.hwndList, true);
-        SendMessageW(info.hwndList, WM_NCPAINT, 1, 0);
+        RepaintDropdownFrame(info.hwndList);
         Check(hoverFrame.pixels == Capture(info.hwndList, true).pixels, "Dropdown scrollbar hover has no native transient frame");
         const auto framed = Capture(info.hwndList, true);
         Check(framed.Pixel(barInfo.rcScrollBar.left - bounds.left + 1,
-            barInfo.rcScrollBar.top - bounds.top + barInfo.dxyLineButton + 2) == ThemeManager::WindowColor(), "Dropdown scrollbar gutter is themed");
+            barInfo.rcScrollBar.top - bounds.top + barInfo.dxyLineButton + 2) == ThemeManager::SurfaceColor(), "Dropdown scrollbar gutter is themed");
         SendMessageW(info.hwndList, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)), 0); Pump(state);
         const auto scrolledDropdown = Capture(info.hwndList, true);
         Check(scrolledDropdown.Pixel(barInfo.rcScrollBar.left - bounds.left + 1,
-            barInfo.rcScrollBar.top - bounds.top + barInfo.dxyLineButton + 2) == ThemeManager::WindowColor(), "Dropdown scrollbar remains themed after scrolling");
+            barInfo.rcScrollBar.top - bounds.top + barInfo.dxyLineButton + 2) == ThemeManager::SurfaceColor(), "Dropdown scrollbar remains themed after scrolling");
         Save(scrolledDropdown, directory / L"dropdown-scrolled.bmp");
         SendMessageW(combo, CB_SHOWDROPDOWN, FALSE, 0);
         EqualToFullRepaint(state, directory, L"dropdown-dismissed");
@@ -282,18 +543,25 @@ int wmain(int argc, wchar_t** argv)
             EqualToFullRepaint(state, directory, theme == ThemePreference::Dark ? L"dark-switch" : L"light-switch");
             Check(ProfileEditor::IsDirty(editor), "Theme switching keeps the draft");
             CheckMenuArrows(state);
+            CheckDropdownScrolling(state, combo);
+            CheckScrollbarInteraction(state, FindWindowExW(editor, nullptr, L"SCROLLBAR", nullptr));
+            CheckScrollbarInteraction(state, FindWindowExW(library, nullptr, L"SCROLLBAR", nullptr));
             CheckScrollbarTransient(state, FindWindowExW(editor, nullptr, L"SCROLLBAR", nullptr), L"editor-theme-switch");
             CheckScrollbarTransient(state, FindWindowExW(library, nullptr, L"SCROLLBAR", nullptr), L"library-theme-switch");
             Save(Capture(host), directory / (theme == ThemePreference::Dark ? L"dark-scrolled.bmp" : L"light-scrolled.bmp"));
         }
         SetWindowTextW(GetDlgItem(state.view.Window(), 4102), L"sample-game-79"); EqualToFullRepaint(state, directory, L"filtered-list");
         const auto emptyArea = Capture(list);
-        Check(emptyArea.Pixel(5, emptyArea.height - 5) == ThemeManager::WindowColor(), "List blank area has the theme background");
+        Check(emptyArea.Pixel(5, emptyArea.height - 5) == ThemeManager::SurfaceColor(), "List blank area has the theme background");
         SetWindowTextW(GetDlgItem(state.view.Window(), 4102), L"no-matching-game"); EqualToFullRepaint(state, directory, L"empty-list");
+        CheckPanel(library);
+        const auto disabledBar = Capture(FindWindowExW(library, nullptr, L"SCROLLBAR", nullptr));
+        Check(disabledBar.Pixel(disabledBar.width / 2, disabledBar.height / 2) == ThemeManager::SurfaceColor(),
+            "Empty library has a themed track without a stale thumb");
         SetWindowTextW(GetDlgItem(state.view.Window(), 4102), L"");
         g_language = UiLanguage::English; ThemeManager::Initialize(dpi); state.view.Refresh(true); state.menu.SetMenu(UI::CreateAppMenu());
         SetWindowPos(host, nullptr, 0, 0, scale(850), scale(600), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-        EqualToFullRepaint(state, directory, L"narrow"); Save(Capture(host), directory / L"narrow.bmp");
+        EqualToFullRepaint(state, directory, L"narrow"); CheckPanel(editor); CheckPanel(library); Save(Capture(host), directory / L"narrow.bmp");
         SetWindowPos(host, nullptr, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         EqualToFullRepaint(state, directory, L"restored-size");
         SetTimer(host, 1, 250, nullptr); SendMessageW(GetDlgItem(state.menu.Window(), 1), BM_CLICK, 0, 0); Pump(state);

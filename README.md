@@ -21,19 +21,22 @@ A lightweight Windows utility that prevents accidental key presses in games. Set
 - **Independent input-language protection:** configure it separately from key blocking. Chat can release input-language control while selected keys remain blocked.
 - **Easy profile management:** search, copy/paste and import/export; full paths distinguish games with the same executable name.
 - **Tray controls:** configurable pause, startup and notifications; Chinese/English, light/dark themes and keyboard navigation.
+- **Consistent themed panels:** rounded, subtle borders around the library and editor; matching scroll tracks with distinct hover and drag states, plus wheel and keyboard scrolling. Dropdown scrollbars also retain their theme while scrolling.
 - **Native and lightweight:** C++20 / Win32, with no browser runtime, managed framework, background service, driver or code injected into games.
 
 Selecting a game edits its profile; protection follows the foreground game. Changes apply after saving, and theme changes retain your draft. The separate global Windows-key policy can optionally block it on the desktop as well.
 
 ## Configuration and compatibility
 
-Settings are saved to `%APPDATA%\FFKeyLock\config.ini`. Create `portable.ini` beside the executable, or use `--config "C:\path\config.ini"`, for isolated settings. `--background` starts directly in the tray.
+The installed edition saves settings to `%APPDATA%\FFKeyLock\config.ini`; upgrades preserve existing settings and language. ZIP packages include an empty-library `portable.ini` and save settings beside the executable. When updating a portable copy, keep your own `portable.ini` instead of overwriting it with the packaged template. Create `portable.ini` beside the executable, or use `--config "C:\path\config.ini"`, for isolated settings. `--background` starts directly in the tray.
 
 Migration preserves a `.v1.bak` copy; invalid configuration is preserved as `.invalid.bak` before a later save. Import merges game profiles while retaining global settings. An intentionally empty library stays empty.
 
 The local key test works only while FFKeyLock is in front. Games with anti-cheat, special input paths or elevated privileges require real-game verification; the local test does not guarantee compatibility. Ctrl, Alt and the emergency key remain available.
 
 ## Build and test
+
+Switch to `dev` before development; synchronize branches after validation.
 
 Requires Visual Studio C++ toolset **v145**, Windows SDK 10.0 and MSBuild. Open `FFKeyLock.slnx`, or run:
 
@@ -53,6 +56,8 @@ Install Inno Setup and build the matching architecture first:
 ```powershell
 ISCC.exe /DAppArchitecture=x64 installer/FFKeyLock.iss
 ```
+
+Run `powershell -File scripts/Test-ReleaseVersion.ps1` before packaging to validate versions. Build a portable ZIP in `dist/` with `powershell -File scripts/New-PortablePackage.ps1 -Architecture x64`.
 
 Supported architecture arguments: `x64`, `x86`, `arm64`. Output: `installer/output/`.
 

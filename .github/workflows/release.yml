@@ -20,6 +20,19 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = & ./scripts/Test-ReleaseVersion.ps1 -Tag $env:RELEASE_TAG
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Release tooling regression tests
+        shell: pwsh
+        run: ./tests/ReleaseTooling.Tests.ps1
+
       - name: Install ARM64 C++ tools
         shell: pwsh
         run: |
@@ -41,13 +54,6 @@ jobs:
             throw "Failed to install ARM64 C++ tools. Exit code: $LASTEXITCODE"
           }
 
-      - name: Resolve version
-        id: version
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          "version=$version" >> $env:GITHUB_OUTPUT
-
       - name: Build Release executables
         shell: pwsh
         run: |
@@ -58,6 +64,10 @@ jobs:
               throw "Build failed for $platform."
             }
           }
+
+      - name: Verify executable versions
+        shell: pwsh
+        run: ./scripts/Test-ReleaseVersion.ps1 -Artifacts @("x64/Release/FFKeyLock.exe", "Release/FFKeyLock.exe", "ARM64/Release/FFKeyLock.exe")
 
       - name: Regression tests
         shell: pwsh
@@ -110,7 +120,9 @@ jobs:
           )
 
           foreach ($exe in $executables) {
-            $process = Start-Process -FilePath "$PWD\$exe" -PassThru
+            $config = Join-Path $env:RUNNER_TEMP "FFKeyLock-smoke.ini"
+            "[Settings]`nVersion=2`nProtectionEnabled=0`n[Library]`nCount=0" | Set-Content $config
+            $process = Start-Process -FilePath "$PWD\$exe" -ArgumentList @('--background', '--config', ('"' + $config + '"')) -WindowStyle Hidden -PassThru
             Start-Sleep -Seconds 3
             $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
             if (-not $running) {
@@ -122,6 +134,10 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
+
+      - name: Installer language regression tests
+        shell: pwsh
+        run: ./tests/InstallerLanguage.Tests.ps1 -Iscc "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 
       - name: Build installers
         shell: pwsh
@@ -144,6 +160,7 @@ jobs:
             if (-not (Test-Path $installer)) {
               throw "Installer was not generated: $installer"
             }
+            & ./scripts/Test-ReleaseVersion.ps1 -Artifacts @($installer)
             Get-Item $installer | Format-List FullName,Length,LastWriteTime
           }
 
@@ -173,7 +190,9 @@ jobs:
               throw "Installed executable was not found: $exe"
             }
 
-            $process = Start-Process -FilePath $exe -PassThru
+            $config = Join-Path $env:RUNNER_TEMP "FFKeyLock-installed-smoke.ini"
+            "[Settings]`nVersion=2`nProtectionEnabled=0`n[Library]`nCount=0" | Set-Content $config
+            $process = Start-Process -FilePath $exe -ArgumentList @('--background', '--config', ('"' + $config + '"')) -WindowStyle Hidden -PassThru
             Start-Sleep -Seconds 3
             $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
             if (-not $running) {
@@ -185,21 +204,9 @@ jobs:
       - name: Create portable packages
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.version }}"
-          $packages = @(
-            @{ Arch = "x64"; Source = "x64\Release\FFKeyLock.exe" },
-            @{ Arch = "x86"; Source = "Release\FFKeyLock.exe" },
-            @{ Arch = "arm64"; Source = "ARM64\Release\FFKeyLock.exe" }
-          )
-
-          foreach ($package in $packages) {
-            $packageRoot = "dist\FFKeyLock-v$version-$($package.Arch)"
-            New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
-            Copy-Item $package.Source $packageRoot\
-            Copy-Item FFKeyLock\FFKeyLock.ico $packageRoot\
-            Copy-Item README.md,README.zh-CN.md,CHANGELOG.md,CHANGELOG-en.md,LICENSE $packageRoot\
-            Copy-Item Assets "$packageRoot\Assets" -Recurse
-            Compress-Archive -Path $packageRoot -DestinationPath "dist\FFKeyLock-v$version-$($package.Arch).zip" -Force
+          foreach ($arch in @("x64", "x86", "arm64")) {
+            $archive = & ./scripts/New-PortablePackage.ps1 -Architecture $arch
+            & ./tests/PortablePackage.Tests.ps1 -Archive $archive
           }
 
       - name: Publish GitHub Release

@@ -300,6 +300,18 @@ COLORREF ThemeManager::BorderColor()
     return g_borderColor;
 }
 
+COLORREF ThemeManager::PanelBorderColor()
+{
+    return g_highContrast ? g_borderColor : g_dark ? RGB(49, 54, 62) : RGB(218, 221, 225);
+}
+
+COLORREF ThemeManager::ScrollThumbColor(bool hot, bool pressed)
+{
+    if (g_highContrast) return pressed || hot ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOWTEXT);
+    if (g_dark) return pressed ? RGB(157, 164, 174) : hot ? RGB(119, 127, 138) : RGB(82, 90, 102);
+    return pressed ? RGB(96, 104, 116) : hot ? RGB(128, 136, 148) : RGB(174, 181, 191);
+}
+
 COLORREF ThemeManager::AccentColor()
 {
     return g_accentColor;

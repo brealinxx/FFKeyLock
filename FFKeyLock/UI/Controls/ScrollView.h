@@ -20,7 +20,7 @@ public:
     void EnsureVisible(HWND child);
     void TrackFocus(HWND child);
 private:
-    HWND viewport_ = nullptr, content_ = nullptr, bar_ = nullptr;
+    HWND viewport_ = nullptr, clip_ = nullptr, content_ = nullptr, bar_ = nullptr;
     UINT dpi_ = 96;
     int height_ = 0, position_ = 0, remainder_ = 0;
     static LRESULT CALLBACK ContentProc(HWND, UINT, WPARAM, LPARAM);

@@ -1,5 +1,5 @@
 #ifndef AppVersion
-#define AppVersion "0.6.0"
+#define AppVersion "0.6.1"
 #endif
 
 #ifndef AppArchitecture
@@ -95,6 +95,8 @@ Name: "desktopicon"; Description: "{cm:DesktopIconTask}"; GroupDescription: "{cm
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchApp,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+#include "InitializeLanguage.iss"
+
 var
   AppLanguagePage: TInputOptionWizardPage;
 
@@ -118,6 +120,12 @@ begin
     AppLanguagePage.Values[0] := True;
 end;
 
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = AppLanguagePage.ID) and
+    FileExists(ExpandConstant('{userappdata}\FFKeyLock\config.ini'));
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigPath: string;
@@ -131,6 +139,7 @@ begin
     else
       AppLanguage := 'zh';
 
-    SetIniString('Settings', 'Language', AppLanguage, ConfigPath);
+    if not InitializeAppLanguage(ConfigPath, AppLanguage) then
+      Log('Could not initialize the application language.');
   end;
 end;
