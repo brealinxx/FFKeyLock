@@ -162,7 +162,8 @@ void MainContentView::Refresh(bool theme)
     else if (g_inGameProtection) detail = Summary(GetGameProfileForExe(g_activeGameExeName)) + (g_chatInputSuspended ? Text(L" · 聊天中，锁键继续生效",L" · Chatting; key blocking remains active") : Text(L" · 切出游戏自动解除",L" · Released when you leave the game"));
     else if (!g_currentDetectedGameName.empty()) detail = Text(L"此游戏的自动应用已关闭。", L"Automatic application is disabled for this game.");
     else detail = Text(L"所选游戏用于编辑；返回该游戏后自动应用已保存配置。", L"Selection is for editing. Saved settings apply when you return to that game.");
-    detail += L"  Ctrl + Alt + " + ProfileEditor::KeyName(g_emergencyKey) + Text(L"：紧急解除", L": emergency unlock");
+    const std::wstring emergencyKey = g_emergencyKey == VK_BACK ? L"Backspace" : ProfileEditor::KeyName(g_emergencyKey);
+    detail += L"  Ctrl + Alt + " + emergencyKey + Text(L"：紧急解除", L": emergency unlock");
     SetText(window_,Detail,detail); SetText(window_,Pause,g_protectionPaused ? Text(L"恢复保护",L"Resume") : Text(L"暂停保护",L"Pause"));
     RefreshList();
     if (!selected_.empty() && !g_gameProfiles.contains(selected_)) { selected_.clear(); LoadSelection(); }

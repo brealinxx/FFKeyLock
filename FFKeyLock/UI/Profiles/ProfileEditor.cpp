@@ -109,6 +109,10 @@ void Layout(HWND hwnd)
     place(Input, pad + (inner + gap) / 2, y, (inner - gap) / 2, row); y += row + gap;
     place(Cat, pad, y, (inner - gap) / 2, row);
     place(Clear, pad + (inner + gap) / 2, y, (inner - gap) / 2, row); y += row + S(hwnd, 16);
+    place(Test, pad, y, inner, row); y += row;
+    const bool testing = Checked(hwnd, Test);
+    place(TestStatus, pad, y, inner, S(hwnd, 40), testing);
+    y += testing ? S(hwnd, 48) : gap;
     place(2200, pad, y, inner, S(hwnd, 40)); y += S(hwnd, 44);
     // Keep short rows on a twelve-column grid. Give long key labels and
     // modifiers explicit spans instead of stretching every key in a short row.
@@ -144,10 +148,6 @@ void Layout(HWND hwnd)
     place(LockWin, pad, y, inner, row); y += row;
     EnableWindow(Item(hwnd, LockWin), !Checked(hwnd, InheritWin));
     place(Notify, pad, y, inner, row); y += row + gap;
-    place(Test, pad, y, inner, row); y += row;
-    const bool testing = Checked(hwnd, Test);
-    place(TestStatus, pad, y, inner, S(hwnd, 40), testing);
-    y += testing ? S(hwnd, 48) : gap;
     place(Advanced, pad, y, inner, row); y += row + gap;
     const bool expanded = Checked(hwnd, Advanced);
     for (auto [label, field] : { std::pair{2201, Language}, {2202, Mode}, {2203, Timeout} })

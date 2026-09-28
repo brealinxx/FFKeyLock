@@ -32,11 +32,11 @@ The installed edition saves settings to `%APPDATA%\FFKeyLock\config.ini`; upgrad
 
 Migration preserves a `.v1.bak` copy; invalid configuration is preserved as `.invalid.bak` before a later save. Import merges game profiles while retaining global settings. An intentionally empty library stays empty.
 
-The local key test works only while FFKeyLock is in front. Games with anti-cheat, special input paths or elevated privileges require real-game verification; the local test does not guarantee compatibility. Ctrl, Alt and the emergency key remain available.
+The key test near the top of the editor checks the current draft and works only while FFKeyLock is in front. Games with anti-cheat, special input paths or elevated privileges require real-game verification; the local test does not guarantee compatibility. Ctrl, Alt and the emergency key remain available.
 
 ## Build and test
 
-Switch to `dev` before development; synchronize branches after validation.
+Develop on `dev`; after verification, commit to `dev`, merge into `main`, push both branches when authorized, and return to `dev`.
 
 Requires Visual Studio C++ toolset **v145**, Windows SDK 10.0 and MSBuild. Open `FFKeyLock.slnx`, or run:
 
